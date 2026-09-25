@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Secrets / local config (contains live Shopee session tokens & cookies)
+config.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
