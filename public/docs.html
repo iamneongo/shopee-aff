@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shopee Aff API — Tài liệu</title>
+  <style>
+    :root { --ee4d2d:#ee4d2d; --bg:#fafafa; --card:#fff; --border:#e3e3e3; --text:#1c1c1c; --muted:#666; --code-bg:#0d1117; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+    header { background:var(--ee4d2d); color:#fff; padding:18px 24px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+    header h1 { margin:0; font-size:20px; }
+    header a { color:#fff; font-size:14px; text-decoration:underline; }
+    .layout { max-width:1040px; margin:0 auto; display:grid; grid-template-columns:210px 1fr; gap:28px; padding:24px 16px; }
+    nav { position:sticky; top:24px; align-self:start; font-size:14px; }
+    nav a { display:block; color:var(--muted); text-decoration:none; padding:4px 0; }
+    nav a:hover { color:var(--ee4d2d); }
+    nav .grp { font-weight:700; color:var(--text); margin-top:14px; }
+    main { min-width:0; }
+    h2 { border-bottom:2px solid var(--border); padding-bottom:6px; margin-top:36px; }
+    h3 { margin-top:28px; }
+    .ep { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px 18px; margin:14px 0; }
+    .method { display:inline-block; font-size:12px; font-weight:700; padding:2px 9px; border-radius:5px; margin-right:8px; color:#fff; }
+    .post{background:#1a7f37;} .get{background:#0969da;}
+    code { font-family: ui-monospace, Consolas, monospace; background:#eef0f2; padding:1px 6px; border-radius:4px; font-size:13px; }
+    pre { background:var(--code-bg); color:#e6edf3; padding:14px 16px; border-radius:8px; overflow:auto; font-size:13px; }
+    pre code { background:none; padding:0; color:inherit; }
+    table { border-collapse:collapse; width:100%; margin:10px 0; font-size:14px; }
+    th,td { border:1px solid var(--border); padding:8px 10px; text-align:left; vertical-align:top; }
+    th { background:#f0f0f0; }
+    .note { background:#fff8e6; border:1px solid #f0d98a; border-radius:8px; padding:12px 14px; font-size:14px; margin:14px 0; }
+    .danger { background:#fdecea; border:1px solid #f3b0aa; border-radius:8px; padding:12px 14px; font-size:14px; margin:14px 0; }
+    @media (max-width:760px){ .layout{grid-template-columns:1fr;} nav{position:static;} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📖 Shopee Aff API — Tài liệu</h1>
+    <a href="/">🧪 Mở trang test</a>
+  </header>
+
+  <div class="layout">
+    <nav>
+      <a href="#gioi-thieu">Giới thiệu</a>
+      <a href="#kien-truc">Kiến trúc bridge</a>
+      <a href="#chay">Cài đặt & chạy</a>
+      <a href="#auth">Xác thực</a>
+      <div class="grp">Endpoints</div>
+      <a href="#health">GET /health</a>
+      <a href="#bridge">GET /api/bridge/status</a>
+      <a href="#link">POST /api/link</a>
+      <a href="#report">GET /api/report</a>
+      <a href="#by-subid">GET /api/report/by-subid</a>
+      <a href="#import">POST /api/config/import-curl</a>
+      <div class="grp">Khác</div>
+      <a href="#errors">Xử lý lỗi</a>
+      <a href="#token">Lấy lại token</a>
+    </nav>
+
+    <main>
+      <h2 id="gioi-thieu">Giới thiệu</h2>
+      <p>REST API bao bọc API nội bộ của Shopee Affiliate để <b>tạo affiliate link</b> và <b>lấy báo cáo chuyển đổi</b>. Mọi response đều là JSON với trường <code>ok</code> (true/false).</p>
+      <div class="danger">⚠️ Đây <b>không</b> phải API chính thức của Shopee. Nó hoạt động nhờ cookie/session của bạn và có thể ngừng chạy khi Shopee thay đổi hệ thống.</div>
+
+      <h2 id="kien-truc">Kiến trúc bridge</h2>
+      <p>Shopee chống bot bằng chữ ký <code>x-sap-sec</code> <b>dùng một lần</b>, sinh trong trình duyệt. Vì vậy server <b>không thể tự gọi</b> endpoint tạo link (luôn lỗi <code>90309999</code>). Giải pháp: một <b>Chrome extension</b> làm cầu nối.</p>
+      <pre><code>client → POST /api/link → API server ──WebSocket(/bridge)──▶ Extension (background)
+                                                                │ executeScript → tab Shopee (MAIN world)
+        client ◀── shortLink ◀── API server ◀───────────────────┘</code></pre>
+      <table>
+        <tr><th>Chức năng</th><th>Cách chạy</th></tr>
+        <tr><td><code>POST /api/link</code></td><td>Qua <b>extension bridge</b> (cần extension + tab Shopee đăng nhập)</td></tr>
+        <tr><td><code>GET /api/report*</code></td><td>Trực tiếp bằng cookie trong <code>config.json</code></td></tr>
+      </table>
+      <div class="note">Xem <code>extension/README.md</code> để cài extension (Load unpacked).</div>
+
+      <h2 id="chay">Cài đặt & chạy</h2>
+      <pre><code>npm install
+copy config.example.json config.json   # rồi điền cookie/token
+npm start                                # http://localhost:3000</code></pre>
+      <p>Mở <code>http://localhost:3000</code> để vào trang test, hoặc <code>http://localhost:3000/docs.html</code> cho trang này.</p>
+
+      <h2 id="auth">Xác thực</h2>
+      <p>Nếu <code>apiKey</code> trong <code>config.json</code> được đặt (khác rỗng), mọi request tới <code>/api/*</code> phải kèm header:</p>
+      <pre><code>x-api-key: &lt;apiKey của bạn&gt;</code></pre>
+      <p>Để trống <code>apiKey</code> nếu không cần bảo vệ (chạy nội bộ).</p>
+
+      <h2>Endpoints</h2>
+
+      <div class="ep" id="health">
+        <h3><span class="method get">GET</span> <code>/health</code></h3>
+        <p>Kiểm tra server sống + liệt kê endpoint.</p>
+        <b>Response</b>
+        <pre><code>{ "ok": true, "service": "shopee-aff-api", "endpoints": [ ... ] }</code></pre>
+      </div>
+
+      <div class="ep" id="bridge">
+        <h3><span class="method get">GET</span> <code>/api/bridge/status</code></h3>
+        <p>Kiểm tra extension đã kết nối server chưa. Nên gọi trước khi tạo link.</p>
+        <b>Response</b>
+        <pre><code>{ "ok": true, "online": true }   // false = chưa có extension</code></pre>
+      </div>
+
+      <div class="ep" id="link">
+        <h3><span class="method post">POST</span> <code>/api/link</code></h3>
+        <p>Tạo affiliate link từ 1 link Shopee gốc. <b>Chạy qua extension bridge.</b></p>
+        <div class="note">Yêu cầu: extension đã kết nối (<code>/api/bridge/status</code> → <code>online:true</code>) và có <b>1 tab affiliate.shopee.vn đang đăng nhập</b> mở trong Chrome.</div>
+        <b>Body (JSON)</b>
+        <table>
+          <tr><th>Trường</th><th>Kiểu</th><th>Bắt buộc</th><th>Mô tả</th></tr>
+          <tr><td><code>originalLink</code></td><td>string</td><td>✅</td><td>Link Shopee cần tạo aff</td></tr>
+          <tr><td><code>subIds</code></td><td>object</td><td>—</td><td><code>{ subId1..subId5 }</code>; bỏ trống → extension dùng mặc định</td></tr>
+        </table>
+        <b>Ví dụ</b>
+        <pre><code>curl -X POST http://localhost:3000/api/link \
+  -H "Content-Type: application/json" \
+  -d '{"originalLink":"https://s.shopee.vn/xxxxx"}'</code></pre>
+        <b>Response</b>
+        <pre><code>{
+  "ok": true,
+  "shortLink": "https://s.shopee.vn/4B0Ewn8cl3",
+  "longLink": "https://shopee.vn/universal-link/product/...",
+  "raw": { ... phản hồi gốc từ Shopee ... }
+}</code></pre>
+        <b>Lỗi thường gặp</b>
+        <table>
+          <tr><th>error</th><th>Nghĩa</th></tr>
+          <tr><td>Extension chưa kết nối…</td><td>Chưa mở Chrome có extension / server sai port</td></tr>
+          <tr><td>Chưa mở tab affiliate.shopee.vn…</td><td>Extension online nhưng không có tab Shopee đăng nhập</td></tr>
+          <tr><td>Extension không phản hồi kịp (timeout)</td><td>Trang Shopee treo — thử tải lại tab</td></tr>
+        </table>
+      </div>
+
+      <div class="ep" id="report">
+        <h3><span class="method get">GET</span> <code>/api/report</code></h3>
+        <p>Lấy danh sách đơn trong khoảng thời gian.</p>
+        <b>Query params</b>
+        <table>
+          <tr><th>Param</th><th>Mặc định</th><th>Mô tả</th></tr>
+          <tr><td><code>days</code></td><td>7</td><td>Số ngày gần nhất</td></tr>
+          <tr><td><code>page</code></td><td>1</td><td>Trang</td></tr>
+          <tr><td><code>size</code></td><td>50</td><td>Số đơn mỗi trang</td></tr>
+        </table>
+        <b>Ví dụ</b>
+        <pre><code>curl "http://localhost:3000/api/report?days=7&page=1&size=50"</code></pre>
+        <b>Response</b>
+        <pre><code>{ "ok": true, "total": 12, "list": [ { "order_sn": "...", "commission": "...", ... } ] }</code></pre>
+      </div>
+
+      <div class="ep" id="by-subid">
+        <h3><span class="method get">GET</span> <code>/api/report/by-subid</code></h3>
+        <p>Lấy báo cáo rồi lọc các đơn khớp SubID.</p>
+        <b>Query params</b>
+        <table>
+          <tr><th>Param</th><th>Mặc định</th><th>Mô tả</th></tr>
+          <tr><td><code>subIds</code></td><td>—</td><td>Danh sách SubID, cách nhau dấu phẩy: <code>web,test</code></td></tr>
+          <tr><td><code>days</code></td><td>7</td><td>Số ngày gần nhất</td></tr>
+        </table>
+        <b>Ví dụ</b>
+        <pre><code>curl "http://localhost:3000/api/report/by-subid?subIds=web,test&days=7"</code></pre>
+        <b>Response</b>
+        <pre><code>{ "ok": true, "total": 12, "matchedCount": 3, "subIds": ["web","test"], "matched": [ ... ] }</code></pre>
+      </div>
+
+      <div class="ep" id="import">
+        <h3><span class="method post">POST</span> <code>/api/config/import-curl</code></h3>
+        <p>Dán lệnh cURL (Copy as cURL từ DevTools) → server tự tách headers/cookie/token và ghi vào <code>config.json</code>. Chủ yếu dùng cập nhật nhanh cookie cho <b>report</b>.</p>
+        <b>Body (JSON)</b>
+        <table>
+          <tr><th>Trường</th><th>Bắt buộc</th><th>Mô tả</th></tr>
+          <tr><td><code>curl</code></td><td>✅</td><td>Nguyên lệnh cURL</td></tr>
+          <tr><td><code>target</code></td><td>—</td><td><code>auto</code> (mặc định) / <code>link</code> / <code>report</code></td></tr>
+        </table>
+        <b>Response</b>
+        <pre><code>{ "ok": true, "target": "report", "headerCount": 14, "hasCookie": true }</code></pre>
+      </div>
+
+      <h2 id="errors">Xử lý lỗi</h2>
+      <p>Khi lỗi, response có dạng:</p>
+      <pre><code>{ "ok": false, "error": "mô tả lỗi", "code": 90309999 }</code></pre>
+      <table>
+        <tr><th>HTTP</th><th>Ý nghĩa</th></tr>
+        <tr><td>400</td><td>Thiếu tham số (vd không có <code>originalLink</code>)</td></tr>
+        <tr><td>401</td><td>Sai/thiếu <code>x-api-key</code></td></tr>
+        <tr><td>404</td><td>Sai endpoint</td></tr>
+        <tr><td>500</td><td>Lỗi từ Shopee hoặc token hết hạn</td></tr>
+      </table>
+
+      <h2 id="token">Lấy lại token khi hết hạn (lỗi 90309999)</h2>
+      <div class="note">Cookie và các token (<code>x-sap-sec</code>, <code>x-sap-ri</code>, <code>af-ac-enc-*</code>, <code>csrf-token</code>) do trình duyệt sinh ra và sẽ hết hạn.</div>
+      <ol>
+        <li>Mở <code>affiliate.shopee.vn</code>, đăng nhập, mở DevTools → tab <b>Network</b>.</li>
+        <li>Thực hiện thao tác (tạo link / mở trang report) để thấy request tương ứng.</li>
+        <li>Copy các header + <code>Cookie</code> mới, dán vào <code>config.json</code> (mục <code>link</code> hoặc <code>report</code>).</li>
+        <li>Không cần restart — config được đọc lại mỗi request.</li>
+      </ol>
+    </main>
+  </div>
+</body>
+</html>

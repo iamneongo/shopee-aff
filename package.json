@@ -1,14 +1,20 @@
 {
   "name": "shopeeaff",
   "version": "1.0.0",
-  "description": "",
-  "main": "node.js",
+  "description": "Shopee Affiliate API (tạo link + báo cáo)",
+  "main": "src/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "link": "node getlink.js",
+    "report": "node report.js",
+    "report:subid": "node reportId.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "axios": "^1.20.0"
+    "axios": "^1.20.0",
+    "express": "^4.22.3",
+    "ws": "^8.21.3"
   }
 }

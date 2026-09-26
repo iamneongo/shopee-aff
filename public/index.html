@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shopee Aff API — Test</title>
+  <style>
+    :root {
+      --ee4d2d: #ee4d2d;
+      --bg: #f5f5f5;
+      --card: #ffffff;
+      --border: #e3e3e3;
+      --text: #222;
+      --muted: #777;
+      --ok: #1a7f37;
+      --err: #d1242f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+    }
+    header {
+      background: var(--ee4d2d); color: #fff; padding: 18px 24px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    }
+    header h1 { margin: 0; font-size: 20px; }
+    header a { color: #fff; font-size: 14px; text-decoration: underline; }
+    .wrap { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    .settings {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px; margin-bottom: 20px; display: grid; gap: 12px;
+      grid-template-columns: 1fr 1fr;
+    }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 18px; margin-bottom: 18px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 17px; }
+    .method {
+      display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px;
+      border-radius: 5px; margin-right: 6px; color: #fff; vertical-align: middle;
+    }
+    .post { background: #1a7f37; }
+    .get { background: #0969da; }
+    code.path { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 13px; color: var(--muted); }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+    input, textarea {
+      width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px;
+      font-size: 14px; font-family: inherit;
+    }
+    textarea { font-family: ui-monospace, Consolas, monospace; font-size: 13px; resize: vertical; }
+    .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    button {
+      margin-top: 14px; background: var(--ee4d2d); color: #fff; border: 0; border-radius: 7px;
+      padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .result {
+      margin-top: 14px; background: #0d1117; color: #e6edf3; border-radius: 8px;
+      padding: 14px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+      white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; display: none;
+    }
+    .result.show { display: block; }
+    .status { font-size: 13px; font-weight: 600; margin-top: 10px; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .hint { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+    @media (max-width: 640px) { .settings, .row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🛒 Shopee Aff API — Test</h1>
+    <a href="/docs.html">📖 Xem tài liệu API</a>
+  </header>
+
+  <div class="wrap">
+    <!-- Trạng thái extension bridge -->
+    <div id="bridgeBanner" style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;margin-bottom:18px;font-size:14px;background:#fff;border:1px solid var(--border);">
+      <span id="bridgeDot" style="width:11px;height:11px;border-radius:50%;background:#999;flex:none;"></span>
+      <span id="bridgeText">Đang kiểm tra extension…</span>
+      <button onclick="refreshBridge()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;">↻ Kiểm tra</button>
+    </div>
+
+    <!-- Import config từ cURL -->
+    <div class="card" style="border-color:#ee4d2d;">
+      <h2>🔑 Cập nhật token bằng cURL</h2>
+      <p class="hint">Mở DevTools (F12) → Network → chuột phải request <code>batchCustomLink</code> hoặc <code>report/list</code> → <b>Copy → Copy as cURL (bash)</b> → dán vào đây.</p>
+      <label for="curlTarget">Endpoint</label>
+      <select id="curlTarget" style="width:100%; padding:9px 11px; border:1px solid #e3e3e3; border-radius:7px; font-size:14px;">
+        <option value="auto">Tự động phát hiện</option>
+        <option value="link">link (tạo affiliate link)</option>
+        <option value="report">report (báo cáo)</option>
+      </select>
+      <label for="curlInput">Dán lệnh cURL</label>
+      <textarea id="curlInput" rows="6" placeholder="curl 'https://affiliate.shopee.vn/api/v3/gql?q=batchCustomLink' -H '...' -b '...' ..."></textarea>
+      <button onclick="importCurl(event)">💾 Trích xuất & lưu vào config</button>
+      <div class="status" id="curlStatus"></div>
+      <div class="result" id="curlResult"></div>
+    </div>
+
+    <!-- Tạo link -->
+    <div class="card">
+      <h2><span class="method post">POST</span> Tạo affiliate link</h2>
+      <code class="path">/api/link</code>
+      <p class="hint">⚡ Chạy qua <b>extension bridge</b> — cần extension đã kết nối + 1 tab <code>affiliate.shopee.vn</code> đang đăng nhập.</p>
+      <label for="originalLink">Link Shopee gốc</label>
+      <input id="originalLink" placeholder="https://s.shopee.vn/xxxxx" />
+      <label for="subIds">SubIds (JSON — tuỳ chọn)</label>
+      <textarea id="subIds" rows="4" placeholder='{ "subId1": "web", "subId2": "sale" }'></textarea>
+      <p class="hint">Để trống để extension tự dùng SubIds mặc định.</p>
+      <button onclick="createLink()">▶ Tạo link</button>
+      <div class="status" id="linkStatus"></div>
+      <div class="result" id="linkResult"></div>
+    </div>
+
+    <!-- Báo cáo -->
+    <div class="card">
+      <h2><span class="method get">GET</span> Báo cáo chuyển đổi</h2>
+      <code class="path">/api/report</code>
+      <div class="row">
+        <div><label for="days">Số ngày</label><input id="days" type="number" value="7" /></div>
+        <div><label for="page">Trang</label><input id="page" type="number" value="1" /></div>
+        <div><label for="size">Kích thước</label><input id="size" type="number" value="50" /></div>
+      </div>
+      <button onclick="getReport()">▶ Lấy báo cáo</button>
+      <div class="status" id="reportStatus"></div>
+      <div class="result" id="reportResult"></div>
+    </div>
+
+    <!-- Báo cáo theo SubID -->
+    <div class="card">
+      <h2><span class="method get">GET</span> Báo cáo lọc theo SubID</h2>
+      <code class="path">/api/report/by-subid</code>
+      <div class="row" style="grid-template-columns: 2fr 1fr;">
+        <div><label for="subIdList">SubIds (cách nhau dấu phẩy)</label><input id="subIdList" value="web,test" /></div>
+        <div><label for="days2">Số ngày</label><input id="days2" type="number" value="7" /></div>
+      </div>
+      <button onclick="getBySubId()">▶ Lọc theo SubID</button>
+      <div class="status" id="subidStatus"></div>
+      <div class="result" id="subidResult"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function call(method, pathAndQuery, body, statusId, resultId, btn) {
+      const st = $(statusId), out = $(resultId);
+      st.textContent = "⏳ Đang gọi..."; st.className = "status";
+      out.className = "result show"; out.textContent = "";
+      if (btn) btn.disabled = true;
+      const t0 = performance.now();
+      try {
+        const res = await fetch(pathAndQuery, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const ms = Math.round(performance.now() - t0);
+        const data = await res.json().catch(() => ({}));
+        out.textContent = JSON.stringify(data, null, 2);
+        if (res.ok && data.ok) {
+          st.textContent = `✅ ${res.status} OK · ${ms}ms`; st.className = "status ok";
+        } else {
+          st.textContent = `❌ ${res.status} · ${data.error || "Lỗi"}${data.code ? " (code " + data.code + ")" : ""} · ${ms}ms`;
+          st.className = "status err";
+        }
+      } catch (e) {
+        st.textContent = "❌ Không kết nối được server: " + e.message;
+        st.className = "status err";
+        out.textContent = String(e);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function importCurl(ev) {
+      const curl = $("curlInput").value.trim();
+      if (!curl) { alert("Dán lệnh cURL trước."); return; }
+      const target = $("curlTarget").value;
+      call("POST", "/api/config/import-curl", { curl, target }, "curlStatus", "curlResult", ev.target);
+    }
+
+    function createLink() {
+      const originalLink = $("originalLink").value.trim();
+      if (!originalLink) { alert("Nhập link Shopee gốc trước."); return; }
+      let subIds;
+      const raw = $("subIds").value.trim();
+      if (raw) {
+        try { subIds = JSON.parse(raw); }
+        catch { alert("SubIds không phải JSON hợp lệ."); return; }
+      }
+      call("POST", "/api/link", { originalLink, subIds }, "linkStatus", "linkResult", event.target);
+    }
+
+    function getReport() {
+      const q = new URLSearchParams({
+        days: $("days").value || 7,
+        page: $("page").value || 1,
+        size: $("size").value || 50,
+      });
+      call("GET", "/api/report?" + q, null, "reportStatus", "reportResult", event.target);
+    }
+
+    function getBySubId() {
+      const q = new URLSearchParams({
+        subIds: $("subIdList").value.trim(),
+        days: $("days2").value || 7,
+      });
+      call("GET", "/api/report/by-subid?" + q, null, "subidStatus", "subidResult", event.target);
+    }
+
+    async function refreshBridge() {
+      const dot = $("bridgeDot"), txt = $("bridgeText");
+      txt.textContent = "Đang kiểm tra extension…";
+      dot.style.background = "#999";
+      try {
+        const res = await fetch("/api/bridge/status");
+        const data = await res.json();
+        if (data.online) {
+          dot.style.background = "#1a7f37";
+          txt.innerHTML = "<b>Extension đã kết nối</b> — sẵn sàng tạo link.";
+        } else {
+          dot.style.background = "#d1242f";
+          txt.innerHTML = "<b>Extension chưa kết nối.</b> Mở Chrome đã cài extension + tab affiliate.shopee.vn đã đăng nhập.";
+        }
+      } catch (e) {
+        dot.style.background = "#d1242f";
+        txt.textContent = "Không gọi được server.";
+      }
+    }
+
+    // Tự kiểm tra khi tải trang + mỗi 10s
+    refreshBridge();
+    setInterval(refreshBridge, 10000);
+  </script>
+</body>
+</html>
