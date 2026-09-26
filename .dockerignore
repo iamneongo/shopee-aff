@@ -1,0 +1,9 @@
+node_modules
+.git
+.chrome-profile
+.chrome-profile-test
+worker-screen.png
+captcha.png
+*.log
+config.json
+npm-debug.log*

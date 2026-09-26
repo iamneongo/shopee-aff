@@ -2,6 +2,7 @@ const path = require("path");
 const express = require("express");
 const { loadConfig } = require("./config");
 const worker = require("./puppeteerWorker");
+const notifier = require("./notifier");
 const { ShopeeError } = require("./shopee");
 
 const app = express();
@@ -85,20 +86,54 @@ app.get("/api/worker/qr.png", (req, res) => {
   });
 });
 
-// ===== Tạo affiliate link =====
-// POST /api/link  body: { originalLink, subIds? }
+// Gửi thử thông báo (kiểm tra cấu hình Telegram/webhook)
+app.get(
+  "/api/notify/test",
+  wrap(async (req, res) => {
+    const r = await notifier.notifyNow("test", "✅ Test thông báo Shopee Aff API — cấu hình notify OK.", worker.SHOT);
+    res.json({ ok: r.ok, detail: r });
+  }),
+);
+
+// ===== Tạo affiliate link (cashback) =====
+// POST /api/link  body: { originalLink, userId?, subIds? }
+// - userId: mã người dùng nhận cashback -> gắn vào subId1 để quy đơn khi có báo cáo.
+// - subIds: ghi đè/bổ sung subId1..subId5 (ưu tiên hơn defaultSubIds; userId thắng subId1).
 app.post(
   "/api/link",
   wrap(async (req, res) => {
-    const { originalLink, subIds } = req.body || {};
+    const { originalLink, userId, subIds } = req.body || {};
     if (!originalLink) throw new ShopeeError("Thiếu originalLink.", { status: 400 });
-    const result = await worker.createLink(originalLink, subIds);
+
+    let cfg = {};
+    try { cfg = loadConfig(); } catch {}
+    const finalSubIds = { ...(cfg.defaultSubIds || {}), ...(subIds || {}) };
+    if (userId != null && String(userId).trim() !== "") {
+      finalSubIds.subId1 = String(userId).trim();
+    }
+    // bỏ subId rỗng để Shopee không nhận giá trị trống
+    Object.keys(finalSubIds).forEach((k) => { if (!finalSubIds[k]) delete finalSubIds[k]; });
+
+    const result = await worker.createLink(originalLink, finalSubIds);
     if (!result || !result.ok) {
+      // Báo động để bạn vào giải captcha / đăng nhập lại
+      if (result && result.code === 90309999) {
+        notifier.notify("captcha", "⚠️ Shopee bắt CAPTCHA (90309999). Vào Chrome bot tạo 1 link qua giao diện để giải, rồi thử lại.", worker.SHOT);
+      } else if (result && /đăng nhập/i.test(result.error || "")) {
+        notifier.notify("login", "⚠️ Shopee CHƯA ĐĂNG NHẬP. Mở Chrome bot và đăng nhập lại.", worker.SHOT);
+      }
       throw new ShopeeError((result && result.error) || "Không tạo được link.", {
         code: result && result.code, data: result && result.raw, status: 502,
       });
     }
-    res.json({ ok: true, shortLink: result.shortLink, longLink: result.longLink, raw: result.raw });
+    res.json({
+      ok: true,
+      userId: finalSubIds.subId1 || null,
+      subIds: finalSubIds,
+      shortLink: result.shortLink,
+      longLink: result.longLink,
+      raw: result.raw,
+    });
   }),
 );
 
@@ -149,6 +184,16 @@ if (require.main === module) {
     app.listen(port, () => {
       console.log(`🚀 Shopee Aff API đang chạy tại http://localhost:${port}`);
     });
+
+    // Health-loop: tự phát hiện mất đăng nhập -> báo động (mỗi 60s)
+    let wasLoggedIn = worker.getStatus().loggedIn;
+    setInterval(() => {
+      const s = worker.getStatus();
+      if (wasLoggedIn && !s.loggedIn) {
+        notifier.notify("login", "⚠️ Chrome bot vừa MẤT ĐĂNG NHẬP Shopee. Vào đăng nhập lại để tiếp tục tạo link.", worker.SHOT);
+      }
+      wasLoggedIn = s.loggedIn;
+    }, 60000).unref?.();
   })();
 }
 

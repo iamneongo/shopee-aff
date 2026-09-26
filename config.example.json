@@ -1,6 +1,12 @@
 {
     "port": 3000,
     "apiKey": "",
+    "notify": {
+        "enabled": true,
+        "cooldownSec": 300,
+        "telegram": { "botToken": "", "chatId": "" },
+        "webhook": ""
+    },
     "puppeteer": {
         "connectURL": "",
         "executablePath": "",
@@ -11,11 +17,11 @@
         "proxy": ""
     },
     "defaultSubIds": {
-        "subId1": "web",
-        "subId2": "test",
-        "subId3": "uTest",
-        "subId4": "cTest",
-        "subId5": "v1"
+        "subId1": "guest",
+        "subId2": "web",
+        "subId3": "cashback",
+        "subId4": "",
+        "subId5": ""
     },
     "link": {
         "url": "https://affiliate.shopee.vn/api/v3/gql?q=batchCustomLink",

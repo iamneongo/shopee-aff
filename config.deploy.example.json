@@ -1,0 +1,26 @@
+{
+    "port": 4000,
+    "apiKey": "ĐẶT_API_KEY_MẠNH_Ở_ĐÂY",
+    "notify": {
+        "enabled": true,
+        "cooldownSec": 300,
+        "telegram": { "botToken": "", "chatId": "" },
+        "webhook": ""
+    },
+    "puppeteer": {
+        "connectURL": "",
+        "executablePath": "/usr/bin/google-chrome",
+        "userDataDir": "/data/chrome-profile",
+        "headless": false,
+        "startUrl": "https://affiliate.shopee.vn/offer/custom_link",
+        "windowSize": "1280,900",
+        "proxy": ""
+    },
+    "defaultSubIds": {
+        "subId1": "guest",
+        "subId2": "web",
+        "subId3": "cashback",
+        "subId4": "",
+        "subId5": ""
+    }
+}

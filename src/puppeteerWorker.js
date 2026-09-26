@@ -93,7 +93,17 @@ function pageDo(action, params) {
 }
 
 async function saveShot() {
-  try { await page.screenshot({ path: SHOT }); return true; } catch { return false; }
+  // Cửa sổ headful bị ẩn/minimize có thể làm page.screenshot() treo vô hạn
+  // -> bọc timeout, ảnh chụp chỉ là tiện ích, tuyệt đối không được chặn luồng chính.
+  try {
+    await Promise.race([
+      page.screenshot({ path: SHOT }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("shot timeout")), 4000)),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function refreshLogin() {
@@ -144,6 +154,7 @@ async function init(config) {
       defaultViewport: null,
       args: [
         "--no-sandbox", "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
         "--disable-gpu", "--disable-software-rasterizer",
         "--window-size=" + (cfg.windowSize || "1280,900"),

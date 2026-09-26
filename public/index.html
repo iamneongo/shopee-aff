@@ -91,9 +91,11 @@
       <p class="hint">⚡ Chạy qua <b>Puppeteer</b> — cần Chrome (worker) đã đăng nhập Shopee. Xem trạng thái ở banner trên.</p>
       <label for="originalLink">Link Shopee gốc</label>
       <input id="originalLink" placeholder="https://s.shopee.vn/xxxxx" />
-      <label for="subIds">SubIds (JSON — tuỳ chọn)</label>
-      <textarea id="subIds" rows="4" placeholder='{ "subId1": "web", "subId2": "sale" }'></textarea>
-      <p class="hint">Để trống để dùng SubIds mặc định.</p>
+      <label for="userId">User ID (cashback) — gắn vào subId1</label>
+      <input id="userId" placeholder="vd: u12345" />
+      <label for="subIds">SubIds (JSON — tuỳ chọn, ghi đè)</label>
+      <textarea id="subIds" rows="3" placeholder='{ "subId2": "app", "subId3": "cashback" }'></textarea>
+      <p class="hint">Để trống để dùng SubIds mặc định trong config.</p>
       <button onclick="createLink()">▶ Tạo link</button>
       <div class="status" id="linkStatus"></div>
       <div class="result" id="linkResult"></div>
@@ -163,13 +165,17 @@
     function createLink() {
       const originalLink = $("originalLink").value.trim();
       if (!originalLink) { alert("Nhập link Shopee gốc trước."); return; }
+      const userId = $("userId").value.trim();
       let subIds;
       const raw = $("subIds").value.trim();
       if (raw) {
         try { subIds = JSON.parse(raw); }
         catch { alert("SubIds không phải JSON hợp lệ."); return; }
       }
-      call("POST", "/api/link", { originalLink, subIds }, "linkStatus", "linkResult", event.target);
+      const body = { originalLink };
+      if (userId) body.userId = userId;
+      if (subIds) body.subIds = subIds;
+      call("POST", "/api/link", body, "linkStatus", "linkResult", event.target);
     }
 
     function getReport() {

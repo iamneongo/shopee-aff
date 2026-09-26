@@ -42,97 +42,116 @@
   <div class="layout">
     <nav>
       <a href="#gioi-thieu">Giới thiệu</a>
-      <a href="#kien-truc">Kiến trúc bridge</a>
-      <a href="#chay">Cài đặt & chạy</a>
+      <a href="#kien-truc">Kiến trúc</a>
+      <a href="#cashback">Cashback &amp; SubIds</a>
+      <a href="#chay">Cài đặt &amp; chạy</a>
       <a href="#auth">Xác thực</a>
       <div class="grp">Endpoints</div>
       <a href="#health">GET /health</a>
-      <a href="#bridge">GET /api/bridge/status</a>
+      <a href="#status">GET /api/worker/status</a>
       <a href="#link">POST /api/link</a>
       <a href="#report">GET /api/report</a>
       <a href="#by-subid">GET /api/report/by-subid</a>
       <div class="grp">Khác</div>
       <a href="#errors">Xử lý lỗi</a>
-      <a href="#token">Lấy lại token</a>
+      <a href="#notify">Thông báo (Telegram)</a>
+      <a href="#baotri">Bảo trì (login/captcha)</a>
     </nav>
 
     <main>
       <h2 id="gioi-thieu">Giới thiệu</h2>
-      <p>REST API bao bọc API nội bộ của Shopee Affiliate để <b>tạo affiliate link</b> và <b>lấy báo cáo chuyển đổi</b>. Mọi response đều là JSON với trường <code>ok</code> (true/false).</p>
-      <div class="danger">⚠️ Đây <b>không</b> phải API chính thức của Shopee. Nó hoạt động nhờ cookie/session của bạn và có thể ngừng chạy khi Shopee thay đổi hệ thống.</div>
+      <p>REST API cho <b>hệ thống cashback</b>: tạo <b>affiliate link gắn theo từng user</b> và <b>lấy báo cáo chuyển đổi</b> để quy hoa hồng/hoàn tiền. Mọi response là JSON với trường <code>ok</code> (true/false).</p>
+      <div class="danger">⚠️ Dùng API nội bộ Shopee qua session của bạn — không phải API chính thức, có thể đổi bất cứ lúc nào.</div>
 
-      <h2 id="kien-truc">Kiến trúc bridge</h2>
-      <p>Shopee chống bot bằng chữ ký <code>x-sap-sec</code> <b>dùng một lần</b>, sinh trong trình duyệt. Vì vậy server <b>không thể tự gọi</b> endpoint tạo link (luôn lỗi <code>90309999</code>). Giải pháp: một <b>Chrome extension</b> làm cầu nối.</p>
-      <pre><code>client → POST /api/link → API server ──WebSocket(/bridge)──▶ Extension (background)
-                                                                │ executeScript → tab Shopee (MAIN world)
-        client ◀── shortLink ◀── API server ◀───────────────────┘</code></pre>
+      <h2 id="kien-truc">Kiến trúc</h2>
+      <p>Shopee kiểm <b>dấu vân tay TLS của Chrome</b> (post-quantum X25519MLKEM768) ở endpoint tạo link — client Node/curl thuần bị chặn (<code>90309999</code>). Nên server dùng <b>Puppeteer điều khiển một Chrome thật</b> (đã đăng nhập) để gọi trong trang → TLS khớp, tạo link được.</p>
+      <pre><code>client → POST /api/link → API (Puppeteer) → Chrome thật (đã login, đã tin cậy)
+       ← shortLink ←──────────────────────── page.evaluate(fetch)  [TLS Chrome → OK]</code></pre>
+      <p>Hai chế độ (cấu hình ở <code>config.puppeteer</code>):</p>
       <table>
-        <tr><th>Chức năng</th><th>Cách chạy</th></tr>
-        <tr><td><code>POST /api/link</code></td><td>Qua <b>extension bridge</b> (cần extension + tab Shopee đăng nhập)</td></tr>
-        <tr><td><code>GET /api/report*</code></td><td>Trực tiếp bằng cookie trong <code>config.json</code></td></tr>
+        <tr><th>Chế độ</th><th>Mô tả</th></tr>
+        <tr><td><b>connect</b> (khuyến nghị)</td><td>Bạn tự mở Chrome cổng debug (<code>start-chrome.bat</code>); server gắn vào qua <code>connectURL</code>. Ổn định nhất.</td></tr>
+        <tr><td><b>launch</b></td><td>Server tự mở Chrome (<code>headless</code> true/false). Dùng cho VPS + Xvfb — xem <code>DEPLOY.md</code>.</td></tr>
       </table>
-      <div class="note">Xem <code>extension/README.md</code> để cài extension (Load unpacked).</div>
 
-      <h2 id="chay">Cài đặt & chạy</h2>
+      <h2 id="cashback">Cashback &amp; SubIds</h2>
+      <p>Shopee cho gắn tối đa <b>5 SubId</b> vào mỗi link; khi có đơn, báo cáo trả lại đúng các SubId đó → dùng để <b>quy đơn về từng user</b>.</p>
+      <p>Quy ước mặc định của hệ thống (đổi ở <code>config.defaultSubIds</code>):</p>
+      <table>
+        <tr><th>SubId</th><th>Ý nghĩa</th><th>Ví dụ</th></tr>
+        <tr><td><code>subId1</code></td><td><b>userId</b> — người nhận cashback (truyền qua trường <code>userId</code>)</td><td><code>u12345</code></td></tr>
+        <tr><td><code>subId2</code></td><td>Nguồn / nền tảng</td><td><code>web</code>, <code>app</code></td></tr>
+        <tr><td><code>subId3</code></td><td>Nhãn/chiến dịch</td><td><code>cashback</code></td></tr>
+        <tr><td><code>subId4</code>, <code>subId5</code></td><td>Tuỳ ý (mã đơn, click id...)</td><td>—</td></tr>
+      </table>
+      <p><b>Luồng cashback:</b></p>
+      <ol>
+        <li>User bấm "lấy link" → gọi <code>POST /api/link</code> kèm <code>userId</code> → link gắn <code>subId1 = userId</code>.</li>
+        <li>User mua hàng qua link đó.</li>
+        <li>Định kỳ gọi <code>GET /api/report/by-subid?subIds=&lt;userId&gt;</code> → ra các đơn + hoa hồng của user → tính cashback.</li>
+      </ol>
+
+      <h2 id="chay">Cài đặt &amp; chạy</h2>
       <pre><code>npm install
-copy config.example.json config.json   # rồi điền cookie/token
-npm start                                # http://localhost:3000</code></pre>
-      <p>Mở <code>http://localhost:3000</code> để vào trang test, hoặc <code>http://localhost:3000/docs.html</code> cho trang này.</p>
+copy config.example.json config.json
+start-chrome.bat        # mở Chrome bot (cổng 9222) — đăng nhập Shopee 1 lần
+npm start               # server connect vào Chrome đó (http://localhost:4000)</code></pre>
+      <p>Trang test: <code>/</code> · Tài liệu: <code>/docs.html</code>.</p>
 
       <h2 id="auth">Xác thực</h2>
-      <p>Nếu <code>apiKey</code> trong <code>config.json</code> được đặt (khác rỗng), mọi request tới <code>/api/*</code> phải kèm header:</p>
+      <p>Nếu <code>apiKey</code> trong <code>config.json</code> khác rỗng, mọi request <code>/api/*</code> phải kèm header:</p>
       <pre><code>x-api-key: &lt;apiKey của bạn&gt;</code></pre>
-      <p>Để trống <code>apiKey</code> nếu không cần bảo vệ (chạy nội bộ).</p>
 
       <h2>Endpoints</h2>
 
       <div class="ep" id="health">
         <h3><span class="method get">GET</span> <code>/health</code></h3>
         <p>Kiểm tra server sống + liệt kê endpoint.</p>
-        <b>Response</b>
-        <pre><code>{ "ok": true, "service": "shopee-aff-api", "endpoints": [ ... ] }</code></pre>
+        <pre><code>{ "ok": true, "service": "shopee-aff-api", "mode": "puppeteer", "endpoints": [ ... ] }</code></pre>
       </div>
 
-      <div class="ep" id="bridge">
-        <h3><span class="method get">GET</span> <code>/api/bridge/status</code></h3>
-        <p>Kiểm tra extension đã kết nối server chưa. Nên gọi trước khi tạo link.</p>
-        <b>Response</b>
-        <pre><code>{ "ok": true, "online": true }   // false = chưa có extension</code></pre>
+      <div class="ep" id="status">
+        <h3><span class="method get">GET</span> <code>/api/worker/status</code></h3>
+        <p>Trạng thái Chrome worker. Nên kiểm tra trước khi tạo link.</p>
+        <pre><code>{ "ok": true, "mode": "puppeteer", "online": true,
+  "ready": true, "loggedIn": true, "headless": false }</code></pre>
+        <p><code>online = ready &amp;&amp; loggedIn</code>. Nếu <code>loggedIn:false</code> → đăng nhập lại trong cửa sổ Chrome bot.</p>
       </div>
 
       <div class="ep" id="link">
         <h3><span class="method post">POST</span> <code>/api/link</code></h3>
-        <p>Tạo affiliate link từ 1 link Shopee gốc. <b>Chạy qua extension bridge.</b></p>
-        <div class="note">Yêu cầu: extension đã kết nối (<code>/api/bridge/status</code> → <code>online:true</code>) và có <b>1 tab affiliate.shopee.vn đang đăng nhập</b> mở trong Chrome.</div>
+        <p>Tạo affiliate link gắn theo user (cho cashback).</p>
         <b>Body (JSON)</b>
         <table>
           <tr><th>Trường</th><th>Kiểu</th><th>Bắt buộc</th><th>Mô tả</th></tr>
           <tr><td><code>originalLink</code></td><td>string</td><td>✅</td><td>Link Shopee cần tạo aff</td></tr>
-          <tr><td><code>subIds</code></td><td>object</td><td>—</td><td><code>{ subId1..subId5 }</code>; bỏ trống → extension dùng mặc định</td></tr>
+          <tr><td><code>userId</code></td><td>string</td><td>—</td><td>Mã user nhận cashback → gắn vào <code>subId1</code></td></tr>
+          <tr><td><code>subIds</code></td><td>object</td><td>—</td><td>Ghi đè/bổ sung <code>{ subId1..subId5 }</code> (userId thắng subId1)</td></tr>
         </table>
         <b>Ví dụ</b>
-        <pre><code>curl -X POST http://localhost:3000/api/link \
+        <pre><code>curl -X POST http://localhost:4000/api/link \
   -H "Content-Type: application/json" \
-  -d '{"originalLink":"https://s.shopee.vn/xxxxx"}'</code></pre>
+  -d '{"originalLink":"https://s.shopee.vn/xxxxx","userId":"u12345"}'</code></pre>
         <b>Response</b>
         <pre><code>{
   "ok": true,
-  "shortLink": "https://s.shopee.vn/4B0Ewn8cl3",
+  "userId": "u12345",
+  "subIds": { "subId1": "u12345", "subId2": "web", "subId3": "cashback" },
+  "shortLink": "https://s.shopee.vn/7fa7TmbGFn",
   "longLink": "https://shopee.vn/universal-link/product/...",
-  "raw": { ... phản hồi gốc từ Shopee ... }
+  "raw": { ... }
 }</code></pre>
         <b>Lỗi thường gặp</b>
         <table>
           <tr><th>error</th><th>Nghĩa</th></tr>
-          <tr><td>Extension chưa kết nối…</td><td>Chưa mở Chrome có extension / server sai port</td></tr>
-          <tr><td>Chưa mở tab affiliate.shopee.vn…</td><td>Extension online nhưng không có tab Shopee đăng nhập</td></tr>
-          <tr><td>Extension không phản hồi kịp (timeout)</td><td>Trang Shopee treo — thử tải lại tab</td></tr>
+          <tr><td>Chưa đăng nhập Shopee</td><td>Đăng nhập lại trong cửa sổ Chrome bot</td></tr>
+          <tr><td>Shopee lỗi 90309999 (kèm captcha)</td><td>Thiết bị bị bắt captcha — tạo 1 link qua giao diện web để giải, xem <a href="#baotri">Bảo trì</a></td></tr>
         </table>
       </div>
 
       <div class="ep" id="report">
         <h3><span class="method get">GET</span> <code>/api/report</code></h3>
-        <p>Lấy danh sách đơn trong khoảng thời gian.</p>
+        <p>Lấy danh sách đơn chuyển đổi trong khoảng thời gian.</p>
         <b>Query params</b>
         <table>
           <tr><th>Param</th><th>Mặc định</th><th>Mô tả</th></tr>
@@ -140,46 +159,57 @@ npm start                                # http://localhost:3000</code></pre>
           <tr><td><code>page</code></td><td>1</td><td>Trang</td></tr>
           <tr><td><code>size</code></td><td>50</td><td>Số đơn mỗi trang</td></tr>
         </table>
-        <b>Ví dụ</b>
-        <pre><code>curl "http://localhost:3000/api/report?days=7&page=1&size=50"</code></pre>
-        <b>Response</b>
-        <pre><code>{ "ok": true, "total": 12, "list": [ { "order_sn": "...", "commission": "...", ... } ] }</code></pre>
+        <pre><code>curl "http://localhost:4000/api/report?days=7&size=50"</code></pre>
+        <pre><code>{ "ok": true, "total": 12, "list": [ { "order_sn": "...", "commission": "...", "sub_ids": ["u12345","web","cashback"] } ] }</code></pre>
       </div>
 
       <div class="ep" id="by-subid">
         <h3><span class="method get">GET</span> <code>/api/report/by-subid</code></h3>
-        <p>Lấy báo cáo rồi lọc các đơn khớp SubID.</p>
+        <p>Lọc đơn theo SubID — dùng để lấy đơn của <b>một user cụ thể</b> (truyền userId vào <code>subIds</code>).</p>
         <b>Query params</b>
         <table>
           <tr><th>Param</th><th>Mặc định</th><th>Mô tả</th></tr>
-          <tr><td><code>subIds</code></td><td>—</td><td>Danh sách SubID, cách nhau dấu phẩy: <code>web,test</code></td></tr>
+          <tr><td><code>subIds</code></td><td>—</td><td>Danh sách SubID cách nhau dấu phẩy (vd userId: <code>u12345</code>)</td></tr>
           <tr><td><code>days</code></td><td>7</td><td>Số ngày gần nhất</td></tr>
         </table>
-        <b>Ví dụ</b>
-        <pre><code>curl "http://localhost:3000/api/report/by-subid?subIds=web,test&days=7"</code></pre>
-        <b>Response</b>
-        <pre><code>{ "ok": true, "total": 12, "matchedCount": 3, "subIds": ["web","test"], "matched": [ ... ] }</code></pre>
+        <pre><code>curl "http://localhost:4000/api/report/by-subid?subIds=u12345&days=30"</code></pre>
+        <pre><code>{ "ok": true, "total": 40, "matchedCount": 3, "subIds": ["u12345"], "matched": [ ... đơn của user ... ] }</code></pre>
       </div>
 
-
       <h2 id="errors">Xử lý lỗi</h2>
-      <p>Khi lỗi, response có dạng:</p>
       <pre><code>{ "ok": false, "error": "mô tả lỗi", "code": 90309999 }</code></pre>
       <table>
         <tr><th>HTTP</th><th>Ý nghĩa</th></tr>
         <tr><td>400</td><td>Thiếu tham số (vd không có <code>originalLink</code>)</td></tr>
         <tr><td>401</td><td>Sai/thiếu <code>x-api-key</code></td></tr>
         <tr><td>404</td><td>Sai endpoint</td></tr>
-        <tr><td>500</td><td>Lỗi từ Shopee hoặc token hết hạn</td></tr>
+        <tr><td>502</td><td>Shopee từ chối (chưa login / captcha / lỗi Shopee)</td></tr>
       </table>
 
-      <h2 id="token">Lấy lại token khi hết hạn (lỗi 90309999)</h2>
-      <div class="note">Cookie và các token (<code>x-sap-sec</code>, <code>x-sap-ri</code>, <code>af-ac-enc-*</code>, <code>csrf-token</code>) do trình duyệt sinh ra và sẽ hết hạn.</div>
+      <h2 id="notify">Thông báo khi cần giải captcha / đăng nhập</h2>
+      <p>Server <b>tự bắn thông báo</b> (Telegram và/hoặc webhook) khi gặp CAPTCHA hoặc mất đăng nhập, để bạn vào giải. Không tự giải — chỉ gọi bạn vào.</p>
+      <b>Cấu hình <code>config.notify</code></b>
+      <pre><code>"notify": {
+  "enabled": true,
+  "cooldownSec": 300,                     // giãn cách chống spam
+  "telegram": { "botToken": "123:ABC", "chatId": "123456789" },
+  "webhook": "https://..."                // tuỳ chọn: POST {text, reason}
+}</code></pre>
+      <b>Lấy Telegram botToken + chatId</b>
       <ol>
-        <li>Mở <code>affiliate.shopee.vn</code>, đăng nhập, mở DevTools → tab <b>Network</b>.</li>
-        <li>Thực hiện thao tác (tạo link / mở trang report) để thấy request tương ứng.</li>
-        <li>Copy các header + <code>Cookie</code> mới, dán vào <code>config.json</code> (mục <code>link</code> hoặc <code>report</code>).</li>
-        <li>Không cần restart — config được đọc lại mỗi request.</li>
+        <li>Chat với <code>@BotFather</code> → <code>/newbot</code> → lấy <b>botToken</b>.</li>
+        <li>Nhắn 1 tin cho bot vừa tạo, rồi mở <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> → lấy <b>chat.id</b> (hoặc hỏi <code>@userinfobot</code>).</li>
+        <li>Điền vào <code>config.notify.telegram</code>.</li>
+      </ol>
+      <b>Kiểm tra</b>
+      <pre><code>curl http://localhost:4000/api/notify/test   // gửi 1 tin test (kèm ảnh màn hình)</code></pre>
+      <p>Khi có sự cố, bạn sẽ nhận tin kèm ảnh chụp trang → vào Chrome bot giải captcha / đăng nhập (xem Bảo trì).</p>
+
+      <h2 id="baotri">Bảo trì (login / captcha)</h2>
+      <ol>
+        <li><b>Chưa đăng nhập</b> (<code>loggedIn:false</code>): mở cửa sổ Chrome bot (chạy <code>start-chrome.bat</code>) → đăng nhập Shopee. Profile <code>C:\shopee-bot-profile</code> sẽ nhớ.</li>
+        <li><b>Captcha (90309999)</b>: profile mới/lâu không dùng bị Shopee coi là thiết bị lạ. Vào trang <code>affiliate.shopee.vn/offer/custom_link</code> trong Chrome bot, tạo 1 link qua giao diện, <b>giải captcha 1 lần</b> → nhận cookie tin cậy → API chạy lại bình thường.</li>
+        <li>Xem màn hình từ xa: <code>GET /api/worker/screenshot.png</code>; điều hướng tới trang login: <code>GET /api/worker/open-login</code>.</li>
       </ol>
     </main>
   </div>
