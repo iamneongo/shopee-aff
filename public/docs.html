@@ -51,7 +51,6 @@
       <a href="#link">POST /api/link</a>
       <a href="#report">GET /api/report</a>
       <a href="#by-subid">GET /api/report/by-subid</a>
-      <a href="#import">POST /api/config/import-curl</a>
       <div class="grp">Khác</div>
       <a href="#errors">Xử lý lỗi</a>
       <a href="#token">Lấy lại token</a>
@@ -162,18 +161,6 @@ npm start                                # http://localhost:3000</code></pre>
         <pre><code>{ "ok": true, "total": 12, "matchedCount": 3, "subIds": ["web","test"], "matched": [ ... ] }</code></pre>
       </div>
 
-      <div class="ep" id="import">
-        <h3><span class="method post">POST</span> <code>/api/config/import-curl</code></h3>
-        <p>Dán lệnh cURL (Copy as cURL từ DevTools) → server tự tách headers/cookie/token và ghi vào <code>config.json</code>. Chủ yếu dùng cập nhật nhanh cookie cho <b>report</b>.</p>
-        <b>Body (JSON)</b>
-        <table>
-          <tr><th>Trường</th><th>Bắt buộc</th><th>Mô tả</th></tr>
-          <tr><td><code>curl</code></td><td>✅</td><td>Nguyên lệnh cURL</td></tr>
-          <tr><td><code>target</code></td><td>—</td><td><code>auto</code> (mặc định) / <code>link</code> / <code>report</code></td></tr>
-        </table>
-        <b>Response</b>
-        <pre><code>{ "ok": true, "target": "report", "headerCount": 14, "hasCookie": true }</code></pre>
-      </div>
 
       <h2 id="errors">Xử lý lỗi</h2>
       <p>Khi lỗi, response có dạng:</p>

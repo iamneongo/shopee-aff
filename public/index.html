@@ -77,40 +77,23 @@
   </header>
 
   <div class="wrap">
-    <!-- Trạng thái extension bridge -->
+    <!-- Trạng thái worker Puppeteer -->
     <div id="bridgeBanner" style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;margin-bottom:18px;font-size:14px;background:#fff;border:1px solid var(--border);">
       <span id="bridgeDot" style="width:11px;height:11px;border-radius:50%;background:#999;flex:none;"></span>
-      <span id="bridgeText">Đang kiểm tra extension…</span>
+      <span id="bridgeText">Đang kiểm tra worker…</span>
       <button onclick="refreshBridge()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;">↻ Kiểm tra</button>
-    </div>
-
-    <!-- Import config từ cURL -->
-    <div class="card" style="border-color:#ee4d2d;">
-      <h2>🔑 Cập nhật token bằng cURL</h2>
-      <p class="hint">Mở DevTools (F12) → Network → chuột phải request <code>batchCustomLink</code> hoặc <code>report/list</code> → <b>Copy → Copy as cURL (bash)</b> → dán vào đây.</p>
-      <label for="curlTarget">Endpoint</label>
-      <select id="curlTarget" style="width:100%; padding:9px 11px; border:1px solid #e3e3e3; border-radius:7px; font-size:14px;">
-        <option value="auto">Tự động phát hiện</option>
-        <option value="link">link (tạo affiliate link)</option>
-        <option value="report">report (báo cáo)</option>
-      </select>
-      <label for="curlInput">Dán lệnh cURL</label>
-      <textarea id="curlInput" rows="6" placeholder="curl 'https://affiliate.shopee.vn/api/v3/gql?q=batchCustomLink' -H '...' -b '...' ..."></textarea>
-      <button onclick="importCurl(event)">💾 Trích xuất & lưu vào config</button>
-      <div class="status" id="curlStatus"></div>
-      <div class="result" id="curlResult"></div>
     </div>
 
     <!-- Tạo link -->
     <div class="card">
       <h2><span class="method post">POST</span> Tạo affiliate link</h2>
       <code class="path">/api/link</code>
-      <p class="hint">⚡ Chạy qua <b>extension bridge</b> — cần extension đã kết nối + 1 tab <code>affiliate.shopee.vn</code> đang đăng nhập.</p>
+      <p class="hint">⚡ Chạy qua <b>Puppeteer</b> — cần Chrome (worker) đã đăng nhập Shopee. Xem trạng thái ở banner trên.</p>
       <label for="originalLink">Link Shopee gốc</label>
       <input id="originalLink" placeholder="https://s.shopee.vn/xxxxx" />
       <label for="subIds">SubIds (JSON — tuỳ chọn)</label>
       <textarea id="subIds" rows="4" placeholder='{ "subId1": "web", "subId2": "sale" }'></textarea>
-      <p class="hint">Để trống để extension tự dùng SubIds mặc định.</p>
+      <p class="hint">Để trống để dùng SubIds mặc định.</p>
       <button onclick="createLink()">▶ Tạo link</button>
       <div class="status" id="linkStatus"></div>
       <div class="result" id="linkResult"></div>
@@ -177,13 +160,6 @@
       }
     }
 
-    function importCurl(ev) {
-      const curl = $("curlInput").value.trim();
-      if (!curl) { alert("Dán lệnh cURL trước."); return; }
-      const target = $("curlTarget").value;
-      call("POST", "/api/config/import-curl", { curl, target }, "curlStatus", "curlResult", ev.target);
-    }
-
     function createLink() {
       const originalLink = $("originalLink").value.trim();
       if (!originalLink) { alert("Nhập link Shopee gốc trước."); return; }
@@ -215,17 +191,20 @@
 
     async function refreshBridge() {
       const dot = $("bridgeDot"), txt = $("bridgeText");
-      txt.textContent = "Đang kiểm tra extension…";
+      txt.textContent = "Đang kiểm tra worker…";
       dot.style.background = "#999";
       try {
-        const res = await fetch("/api/bridge/status");
+        const res = await fetch("/api/worker/status");
         const data = await res.json();
-        if (data.online) {
+        if (data.ready && data.loggedIn) {
           dot.style.background = "#1a7f37";
-          txt.innerHTML = "<b>Extension đã kết nối</b> — sẵn sàng tạo link.";
+          txt.innerHTML = "<b>Worker sẵn sàng</b> — đã đăng nhập Shopee" + (data.headless ? " (headless)" : "") + ".";
+        } else if (data.ready && !data.loggedIn) {
+          dot.style.background = "#e3a008";
+          txt.innerHTML = "<b>Chưa đăng nhập Shopee.</b> Mở cửa sổ Chrome (headless=false) đăng nhập 1 lần.";
         } else {
           dot.style.background = "#d1242f";
-          txt.innerHTML = "<b>Extension chưa kết nối.</b> Mở Chrome đã cài extension + tab affiliate.shopee.vn đã đăng nhập.";
+          txt.innerHTML = "<b>Worker chưa sẵn sàng.</b>";
         }
       } catch (e) {
         dot.style.background = "#d1242f";

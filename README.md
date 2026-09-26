@@ -1,28 +1,45 @@
 # shopee-aff
 
-REST API (Node.js + Express) để **tạo affiliate link** và **lấy báo cáo chuyển đổi** từ Shopee Affiliate. Vẫn giữ được cách chạy CLI cũ.
+REST API (Node.js + Express) để **tạo affiliate link** và **lấy báo cáo chuyển đổi** từ Shopee Affiliate. Việc tạo link chạy qua **Puppeteer** điều khiển một Chrome thật (đã đăng nhập) — vì Shopee kiểm dấu vân tay TLS của Chrome (post-quantum) nên chỉ trình duyệt thật mới gọi được, không có "native API" thuần.
 
-> ⚠️ Tool này gọi API nội bộ của Shopee bằng cookie/session của chính bạn. Không phải API chính thức — Shopee có thể đổi bất cứ lúc nào.
+> ⚠️ Gọi API nội bộ Shopee bằng session của chính bạn. Không phải API chính thức — có thể đổi bất cứ lúc nào.
 
 ## Cài đặt
 
 ```bash
-npm install
+npm install                          # cài kèm puppeteer-core (cần Chrome đã cài sẵn trên máy)
 cp config.example.json config.json   # Windows: copy config.example.json config.json
 ```
 
-Rồi mở `config.json`, dán **cookie + các token** lấy từ trình duyệt (xem phần "Lấy token" bên dưới).
+## Chạy (khuyến nghị: chế độ CONNECT)
 
-## Chạy API
+Node **gắn vào** một Chrome bạn tự mở (ổn định nhất; tránh lỗi cửa sổ Puppeteer trắng trên Windows). `config.puppeteer.connectURL = "http://127.0.0.1:9222"`.
 
 ```bash
-npm start        # chạy server (mặc định cổng 3000)
-npm run dev      # chạy kèm auto-reload khi sửa code
+# 1) Mở Chrome riêng cho bot (cổng debug 9222, profile riêng)
+start-chrome.bat        # Windows. (Linux/Mac: xem lệnh trong file)
+
+# 2) Đăng nhập Shopee 1 lần trong cửa sổ Chrome vừa mở
+#    Lần đầu: tạo 1 link qua GIAO DIỆN web để giải captcha (Shopee cấp cookie tin cậy).
+
+# 3) Chạy API (server sẽ connect vào Chrome đó)
+npm start
 ```
 
-Sau khi chạy, mở trình duyệt:
-- `http://localhost:3000/` → **trang test** (bấm nút gọi API, xem kết quả ngay)
-- `http://localhost:3000/docs.html` → **trang tài liệu API**
+Kiểm tra: `GET /api/worker/status` → `{ ready, loggedIn, online }`. Khi `loggedIn:true` là tạo link được.
+
+```bash
+curl -X POST http://localhost:4000/api/link -H "Content-Type: application/json" \
+  -d "{\"originalLink\":\"https://s.shopee.vn/xxxxx\"}"
+```
+
+### Chế độ LAUNCH (Node tự mở Chrome)
+Đặt `connectURL:""` → server tự mở Chrome (`headless` true/false). Tiện cho VPS (Xvfb) — xem `DEPLOY.md`. Lưu ý: một số máy Windows bị lỗi cửa sổ trắng → dùng chế độ connect.
+
+### Vì sao phải solve captcha 1 lần?
+Profile Chrome mới bị Shopee coi là thiết bị lạ → bắt captcha. Tạo 1 link qua giao diện web (giải captcha) → nhận cookie `AC_CERT_D` tin cậy → sau đó API chạy thẳng. Profile giữ trust nên không phải làm lại thường xuyên.
+
+Trang: `http://localhost:4000/` (test) · `/docs.html` (tài liệu).
 
 ### Endpoints
 

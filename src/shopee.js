@@ -4,6 +4,20 @@ const { loadConfig } = require("./config");
 // Lỗi đặc thù của Shopee khi token/cookie hết hạn
 const TOKEN_EXPIRED_CODE = 90309999;
 
+// Tự sinh csrf-token từ cookie: header csrf-token = giá trị cookie csrftoken.
+// Nhờ vậy chỉ cần giữ Cookie tươi, khỏi cập nhật riêng csrf-token.
+function csrfFromCookie(cookie) {
+  if (!cookie) return null;
+  const m = cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// Trả về bản headers đã tự điền csrf-token lấy từ Cookie (nếu có)
+function withDerivedCsrf(headers = {}) {
+  const csrf = csrfFromCookie(headers.Cookie);
+  return csrf ? { ...headers, "csrf-token": csrf } : { ...headers };
+}
+
 class ShopeeError extends Error {
   constructor(message, { code, status, data } = {}) {
     super(message);
@@ -142,7 +156,7 @@ async function getReport(opts = {}) {
         purchase_time_e: purchaseTimeEnd,
         version: 1,
       },
-      headers: reportCfg.headers,
+      headers: withDerivedCsrf(reportCfg.headers),
       maxBodyLength: Infinity,
     });
 

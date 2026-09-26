@@ -24,9 +24,4 @@ function loadConfig() {
   }
 }
 
-// Ghi lại config.json (giữ định dạng 4 space cho dễ đọc)
-function saveConfig(obj) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(obj, null, 4) + "\n", "utf8");
-}
-
-module.exports = { loadConfig, saveConfig, CONFIG_PATH };
+module.exports = { loadConfig, CONFIG_PATH };

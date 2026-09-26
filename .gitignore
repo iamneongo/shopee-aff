@@ -4,6 +4,10 @@ node_modules/
 # Secrets / local config (contains live Shopee session tokens & cookies)
 config.json
 
+# Puppeteer: profile Chrome chứa session đăng nhập Shopee — KHÔNG commit
+.chrome-profile/
+worker-screen.png
+
 # Logs
 *.log
 npm-debug.log*

@@ -1,15 +1,8 @@
 const path = require("path");
-const http = require("http");
 const express = require("express");
-const { loadConfig, saveConfig } = require("./config");
-const { parseCurl } = require("./curlParser");
-const bridge = require("./bridge");
-const {
-  createLink,
-  getReport,
-  getReportBySubId,
-  ShopeeError,
-} = require("./shopee");
+const { loadConfig } = require("./config");
+const worker = require("./puppeteerWorker");
+const { ShopeeError } = require("./shopee");
 
 const app = express();
 app.use(express.json());
@@ -35,14 +28,8 @@ app.use("/api", (req, res, next) => {
 // Helper: bọc handler async để bắt lỗi tập trung
 const wrap = (fn) => (req, res) =>
   Promise.resolve(fn(req, res)).catch((err) => {
-    const status =
-      err instanceof ShopeeError && err.status ? err.status : 500;
-    res.status(status).json({
-      ok: false,
-      error: err.message,
-      code: err.code,
-      raw: err.data, // nội dung gốc Shopee trả về (để chẩn lỗi)
-    });
+    const status = err instanceof ShopeeError && err.status ? err.status : 500;
+    res.status(status).json({ ok: false, error: err.message, code: err.code, raw: err.data });
   });
 
 // ===== Health check =====
@@ -50,155 +37,119 @@ app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "shopee-aff-api",
+    mode: "puppeteer",
     endpoints: [
-      "POST /api/link          { originalLink, subIds? }",
-      "GET  /api/report        ?days=7&page=1&size=50",
+      "POST /api/link            { originalLink, subIds? }",
+      "GET  /api/report          ?days=7&page=1&size=50",
       "GET  /api/report/by-subid ?subIds=web,test&days=7",
+      "GET  /api/worker/status",
+      "GET  /api/worker/open-login   (mở/điều hướng trang đăng nhập)",
+      "GET  /api/worker/screenshot.png",
     ],
   });
 });
 
-// ===== Import config từ cURL =====
-// POST /api/config/import-curl  body: { curl: "...", target: "auto"|"link"|"report" }
-// Tự tách headers/cookie/token và ghi vào config.json.
-app.post(
-  "/api/config/import-curl",
+// ===== Trạng thái worker =====
+// Giữ path /api/bridge/status để tương thích trang test (banner trạng thái)
+function statusPayload() {
+  const s = worker.getStatus();
+  return { ok: true, mode: "puppeteer", online: s.ready && s.loggedIn, ...s };
+}
+app.get("/api/bridge/status", (req, res) => res.json(statusPayload()));
+app.get("/api/worker/status", (req, res) => res.json(statusPayload()));
+
+// Điều hướng Chrome tới trang đăng nhập (dùng khi cần login lại)
+app.get(
+  "/api/worker/open-login",
   wrap(async (req, res) => {
-    const { curl, target = "auto" } = req.body || {};
-    if (!curl || !curl.trim()) {
-      throw new ShopeeError("Chưa dán lệnh cURL.", { status: 400 });
-    }
-
-    const parsed = parseCurl(curl);
-    if (Object.keys(parsed.headers).length === 0) {
-      throw new ShopeeError(
-        "Không tách được header nào. Kiểm tra lại: hãy copy dạng 'Copy as cURL (bash)'.",
-        { status: 400 },
-      );
-    }
-
-    // Xác định endpoint: link hay report
-    let dest = target;
-    if (dest === "auto") {
-      const u = parsed.url || "";
-      if (u.includes("batchCustomLink")) dest = "link";
-      else if (u.includes("report/list")) dest = "report";
-      else {
-        throw new ShopeeError(
-          "Không tự nhận diện được endpoint từ URL. Hãy chọn 'link' hoặc 'report'.",
-          { status: 400 },
-        );
-      }
-    }
-    if (!["link", "report"].includes(dest)) {
-      throw new ShopeeError("target phải là 'link', 'report' hoặc 'auto'.", {
-        status: 400,
-      });
-    }
-
-    const config = loadConfig();
-    config[dest] = config[dest] || {};
-    if (parsed.url) config[dest].url = parsed.url;
-    config[dest].headers = parsed.headers;
-    saveConfig(config);
-
-    const cookie = parsed.headers.Cookie || "";
-    res.json({
-      ok: true,
-      target: dest,
-      url: config[dest].url,
-      headerCount: Object.keys(parsed.headers).length,
-      headerKeys: Object.keys(parsed.headers).filter((k) => k !== "Cookie"),
-      hasCookie: !!cookie,
-      cookiePreview: cookie ? cookie.slice(0, 50) + "…" : null,
-    });
+    const r = await worker.navigate(req.query.url || "https://affiliate.shopee.vn/offer/custom_link");
+    res.json(r);
   }),
 );
 
-// ===== Trạng thái bridge (extension đã kết nối chưa) =====
-app.get("/api/bridge/status", (req, res) => {
-  res.json({ ok: true, online: bridge.isOnline() });
+// Ảnh chụp màn hình Chrome hiện tại (để xem/đăng nhập từ xa)
+app.get("/api/worker/screenshot.png", (req, res) => {
+  worker.snapshot().then(() => {
+    res.sendFile(worker.SHOT, (err) => {
+      if (err) res.status(404).json({ ok: false, error: "Chưa có ảnh." });
+    });
+  });
 });
 
-// ===== Tạo affiliate link (qua extension bridge) =====
-// POST /api/link  body: { "originalLink": "...", "subIds": { "subId1": "web", ... } }
-// Đẩy job xuống extension để trang Shopee tự ký chữ ký anti-bot hợp lệ.
+// Hiện mã QR đăng nhập rồi trả ảnh (quét bằng app Shopee)
+app.get("/api/worker/qr.png", (req, res) => {
+  worker.showQr().then(() => {
+    res.sendFile(worker.SHOT, (err) => {
+      if (err) res.status(404).json({ ok: false, error: "Chưa lấy được QR." });
+    });
+  });
+});
+
+// ===== Tạo affiliate link =====
+// POST /api/link  body: { originalLink, subIds? }
 app.post(
   "/api/link",
   wrap(async (req, res) => {
     const { originalLink, subIds } = req.body || {};
-    if (!originalLink) {
-      throw new ShopeeError("Thiếu originalLink.", { status: 400 });
-    }
-    const result = await bridge.runJob("createLink", { originalLink, subIds });
+    if (!originalLink) throw new ShopeeError("Thiếu originalLink.", { status: 400 });
+    const result = await worker.createLink(originalLink, subIds);
     if (!result || !result.ok) {
-      throw new ShopeeError(
-        (result && result.error) || "Extension không tạo được link.",
-        { code: result && result.code, data: result && result.raw, status: 502 },
-      );
+      throw new ShopeeError((result && result.error) || "Không tạo được link.", {
+        code: result && result.code, data: result && result.raw, status: 502,
+      });
     }
-    res.json({
-      ok: true,
-      shortLink: result.shortLink,
-      longLink: result.longLink,
-      raw: result.raw,
-    });
+    res.json({ ok: true, shortLink: result.shortLink, longLink: result.longLink, raw: result.raw });
   }),
 );
 
 // ===== Báo cáo chuyển đổi =====
-// GET /api/report?days=7&page=1&size=50
 app.get(
   "/api/report",
   wrap(async (req, res) => {
-    const result = await getReport({
+    const r = await worker.getReport({
       days: req.query.days ? Number(req.query.days) : undefined,
       pageNum: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.size ? Number(req.query.size) : undefined,
     });
-    res.json({ ok: true, total: result.total, list: result.list });
+    if (!r || r.ok === false) throw new ShopeeError((r && r.error) || "Lỗi lấy báo cáo.", { code: r && r.code, status: 502 });
+    res.json({ ok: true, total: r.total, list: r.list });
   }),
 );
 
 // ===== Báo cáo lọc theo SubID =====
-// GET /api/report/by-subid?subIds=web,test&days=7
 app.get(
   "/api/report/by-subid",
   wrap(async (req, res) => {
-    const subIds = (req.query.subIds || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const result = await getReportBySubId({
-      subIds,
-      days: req.query.days ? Number(req.query.days) : undefined,
+    const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const days = req.query.days ? Number(req.query.days) : 7;
+    const r = await worker.getReport({ days, pageSize: 100 });
+    if (!r || r.ok === false) throw new ShopeeError((r && r.error) || "Lỗi lấy báo cáo.", { code: r && r.code, status: 502 });
+    const matched = (r.list || []).filter((item) => {
+      const subs = item.sub_ids || item.subIds || [];
+      return subIds.some((id) => subs.includes(id));
     });
-    res.json({
-      ok: true,
-      total: result.total,
-      matchedCount: result.matched.length,
-      subIds: result.subIds,
-      matched: result.matched,
-    });
+    res.json({ ok: true, total: r.total, matchedCount: matched.length, subIds, matched });
   }),
 );
 
 // 404
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "Không tìm thấy endpoint." });
-});
+app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm thấy endpoint." }));
 
-// Tạo HTTP server + gắn bridge WebSocket (đường /bridge)
-const server = http.createServer(app);
-bridge.attach(server);
-
-// Chỉ khởi động server khi chạy trực tiếp (node src/server.js)
+// Chỉ khởi động khi chạy trực tiếp (node src/server.js)
 if (require.main === module) {
   const port = process.env.PORT || loadConfig().port || 3000;
-  server.listen(port, () => {
-    console.log(`🚀 Shopee Aff API đang chạy tại http://localhost:${port}`);
-    console.log(`   Bridge WebSocket: ws://localhost:${port}/bridge`);
-  });
+  (async () => {
+    console.log("🧭 Mode: puppeteer — đang mở Chrome...");
+    try {
+      const st = await worker.init(loadConfig());
+      console.log(`   Chrome sẵn sàng | headless: ${st.headless} | đăng nhập Shopee: ${st.loggedIn ? "OK" : "CHƯA (gọi /api/worker/open-login để login)"}`);
+    } catch (e) {
+      console.error("   Puppeteer init lỗi:", e.message);
+    }
+    app.listen(port, () => {
+      console.log(`🚀 Shopee Aff API đang chạy tại http://localhost:${port}`);
+    });
+  })();
 }
 
-module.exports = { app, server };
+module.exports = { app };
