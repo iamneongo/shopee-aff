@@ -143,9 +143,9 @@ async function callSadCaptchaApi(apiKey, puzzleImageB64, pieceImageB64) {
 // Trả về { solved: bool, reason?: string, slideXPixels?: number }
 async function solveCaptcha() {
   if (!page) return { solved: false, reason: "no_page" };
-  const apiKey = fullCfg.sadcaptcha && fullCfg.sadcaptcha.apiKey;
+  const apiKey = process.env.SADCAPTCHA_API_KEY || (fullCfg.sadcaptcha && fullCfg.sadcaptcha.apiKey);
   if (!apiKey) {
-    console.log("[captcha] sadcaptcha.apiKey chưa cấu hình — bỏ qua auto-solve.");
+    console.log("[captcha] SADCAPTCHA_API_KEY chưa cấu hình — bỏ qua auto-solve.");
     return { solved: false, reason: "no_apikey" };
   }
 
