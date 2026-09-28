@@ -334,6 +334,16 @@ async function init(config) {
     const executablePath = findChrome(cfg.executablePath);
     if (!executablePath) throw new Error("Không tìm thấy Chrome. Đặt config.puppeteer.executablePath hoặc CHROME_PATH.");
     const userDataDir = path.resolve(cfg.userDataDir || "./.chrome-profile");
+
+    // Xóa SingletonLock nếu còn lại từ lần container shutdown trước (gây Code:21)
+    for (const lockPath of [
+      path.join(userDataDir, "SingletonLock"),
+      path.join(userDataDir, "SingletonCookie"),
+      path.join(userDataDir, "SingletonSocket"),
+    ]) {
+      try { if (fs.existsSync(lockPath)) { fs.unlinkSync(lockPath); console.log("[init] Đã xóa:", lockPath); } } catch {}
+    }
+
     state.headless = cfg.headless !== false; // mặc định headless
     browser = await puppeteer.launch({
       headless: state.headless ? "new" : false,
