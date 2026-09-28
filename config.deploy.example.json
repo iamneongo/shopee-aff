@@ -1,6 +1,9 @@
 {
     "port": 4000,
     "apiKey": "ĐẶT_API_KEY_MẠNH_Ở_ĐÂY",
+    "sadcaptcha": {
+        "apiKey": ""
+    },
     "notify": {
         "enabled": true,
         "cooldownSec": 300,

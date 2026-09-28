@@ -3,6 +3,7 @@
 // Không cần extension. Profile cố định giữ đăng nhập + fingerprint ổn định.
 const path = require("path");
 const fs = require("fs");
+const https = require("https");
 const { addExtra } = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const puppeteerCore = require("puppeteer-core");
@@ -16,7 +17,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let browser = null;
 let page = null;
-let cfg = {};
+let cfg = {};       // config.puppeteer
+let fullCfg = {};   // toàn bộ config (cho sadcaptcha, notify,...)
 let queue = Promise.resolve();
 const state = { ready: false, loggedIn: false, lastError: null, headless: null };
 
@@ -107,6 +109,146 @@ function pageDo(action, params) {
   return Promise.resolve({ ok: false, error: "Hành động không hợp lệ." });
 }
 
+// ===== SadCaptcha auto-solver =====
+
+// Gọi SadCaptcha REST API để lấy pixel offset cần kéo
+async function callSadCaptchaApi(apiKey, puzzleImageB64, pieceImageB64) {
+  const body = JSON.stringify({ puzzleImageB64, pieceImageB64 });
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "www.sadcaptcha.com",
+        path: `/api/v1/shopeeSlider?licenseKey=${encodeURIComponent(apiKey)}`,
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+        timeout: 30000,
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          try { resolve(JSON.parse(data)); }
+          catch { reject(new Error("SadCaptcha: response không hợp lệ: " + data.slice(0, 200))); }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("SadCaptcha: timeout 30s")); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// Tự động phát hiện và giải Shopee slider captcha.
+// Trả về { solved: bool, reason?: string, slideXPixels?: number }
+async function solveCaptcha() {
+  if (!page) return { solved: false, reason: "no_page" };
+  const apiKey = fullCfg.sadcaptcha && fullCfg.sadcaptcha.apiKey;
+  if (!apiKey) {
+    console.log("[captcha] sadcaptcha.apiKey chưa cấu hình — bỏ qua auto-solve.");
+    return { solved: false, reason: "no_apikey" };
+  }
+
+  try {
+    // Phát hiện phần tử puzzle: background (ảnh đầy đủ có lỗ) + piece (mảnh cần ghép)
+    // Shopee dùng nhiều class tên khác nhau qua các phiên bản, thử lần lượt
+    const BG_SEL = [
+      "img.sesl-puzzle-bg",
+      "[class*='puzzle-bg'] img",
+      "[class*='puzzle-bg']",
+      "[class*='captcha-bg'] img",
+      "[class*='verify-panel'] img",
+    ].join(", ");
+
+    const PIECE_SEL = [
+      "img.sesl-puzzle-piece",
+      "[class*='puzzle-piece'] img",
+      "[class*='puzzle-piece']",
+      "[class*='captcha-piece'] img",
+    ].join(", ");
+
+    const SLIDER_SEL = [
+      ".sesl-slider-btn",
+      "[class*='slider-btn']",
+      "[class*='slide-btn']",
+      "[class*='slider-handle']",
+      "[class*='drag-btn']",
+      "[class*='captcha-slide'] button",
+      "[class*='verify'] button",
+      "[class*='slider'] .btn",
+    ].join(", ");
+
+    const [bgHandle, pieceHandle, sliderHandle] = await Promise.all([
+      page.$(BG_SEL).catch(() => null),
+      page.$(PIECE_SEL).catch(() => null),
+      page.$(SLIDER_SEL).catch(() => null),
+    ]);
+
+    if (!bgHandle) {
+      console.log("[captcha] Không tìm thấy puzzle — không có captcha hoặc selector cần cập nhật.");
+      return { solved: false, reason: "captcha_not_found" };
+    }
+
+    console.log("[captcha] Phát hiện slider captcha, đang chụp ảnh...");
+
+    // Chụp từng element (đáng tin cậy hơn fetch URL vì tránh vấn đề CORS/auth)
+    const bgB64 = await bgHandle.screenshot({ encoding: "base64" }).catch(() => null);
+    const pieceB64 = pieceHandle ? await pieceHandle.screenshot({ encoding: "base64" }).catch(() => null) : null;
+
+    if (!bgB64) return { solved: false, reason: "screenshot_failed" };
+
+    console.log("[captcha] Gọi SadCaptcha API...");
+    const sadResult = await callSadCaptchaApi(apiKey, bgB64, pieceB64);
+
+    if (!sadResult || typeof sadResult.slideXPixels !== "number") {
+      console.error("[captcha] SadCaptcha response không hợp lệ:", JSON.stringify(sadResult));
+      return { solved: false, reason: "invalid_response", detail: sadResult };
+    }
+
+    const dist = sadResult.slideXPixels;
+    console.log(`[captcha] Offset từ SadCaptcha: ${dist}px — đang kéo slider...`);
+
+    if (!sliderHandle) return { solved: false, reason: "no_slider_handle" };
+    const box = await sliderHandle.boundingBox().catch(() => null);
+    if (!box) return { solved: false, reason: "slider_not_visible" };
+
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+
+    // Kéo với chuyển động ease-in-out + nhiễu nhỏ để trông tự nhiên
+    await page.mouse.move(startX, startY);
+    await sleep(80 + Math.random() * 80);
+    await page.mouse.down();
+    await sleep(60 + Math.random() * 40);
+
+    const STEPS = 35;
+    for (let i = 1; i <= STEPS; i++) {
+      const t = i / STEPS;
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      await page.mouse.move(startX + dist * ease, startY + (Math.random() - 0.5) * 2);
+      await sleep(6 + Math.random() * 10);
+    }
+    await page.mouse.move(startX + dist, startY);
+    await sleep(120 + Math.random() * 80);
+    await page.mouse.up();
+
+    await sleep(2500);
+    await saveShot();
+
+    // Kiểm tra kết quả: nếu puzzle biến mất → đã giải xong
+    const stillPresent = await page.$(BG_SEL).catch(() => null);
+    const solved = !stillPresent;
+    console.log(solved
+      ? "[captcha] ✅ Giải thành công!"
+      : "[captcha] ⚠️ Captcha vẫn còn — offset có thể sai hoặc cần thử lại.");
+    return { solved, slideXPixels: dist };
+
+  } catch (e) {
+    console.error("[captcha] Lỗi auto-solve:", e.message);
+    return { solved: false, reason: e.message };
+  }
+}
+
 async function saveShot() {
   // Cửa sổ headful bị ẩn/minimize có thể làm page.screenshot() treo vô hạn
   // -> bọc timeout, ảnh chụp chỉ là tiện ích, tuyệt đối không được chặn luồng chính.
@@ -127,12 +269,37 @@ async function refreshLogin() {
   return state.loggedIn;
 }
 
-// Đảm bảo đang ở trang shopee + app đã load (hook sẵn sàng)
+// Đảm bảo đang ở trang affiliate.shopee.vn + app đã load.
+// Tự động giải captcha nếu Chrome bị redirect sang trang verify.
 async function ensureOnApp() {
   const url = page.url();
   if (!/affiliate\.shopee\.vn/.test(url)) {
-    await page.goto(START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    // Nếu đang ở trang captcha/verify của Shopee → thử giải trước
+    if (/shopee\.(vn|com)/i.test(url)) {
+      const r = await solveCaptcha();
+      if (r.solved) {
+        await sleep(800);
+        // Sau khi giải, Shopee có thể tự redirect về affiliate; nếu chưa thì navigate thủ công
+        if (!/affiliate\.shopee\.vn/.test(page.url())) {
+          await page.goto(START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+        }
+      } else {
+        await page.goto(START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+      }
+    } else {
+      await page.goto(START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    }
   }
+
+  // Sau khi navigate, có thể vẫn bị captcha (ví dụ affiliate.shopee.vn redirect ngược về verify)
+  if (!/affiliate\.shopee\.vn/.test(page.url())) {
+    await solveCaptcha();
+    await sleep(500);
+    if (!/affiliate\.shopee\.vn/.test(page.url())) {
+      await page.goto(START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    }
+  }
+
   // đợi app cài hook fetch (tối đa ~8s), không bắt buộc
   await page.waitForFunction(() => window.__sap_hook_fetch === true, { timeout: 8000 }).catch(() => {});
   await refreshLogin();
@@ -150,6 +317,7 @@ async function callPage(action, params) {
 }
 
 async function init(config) {
+  fullCfg = config || {};
   cfg = (config && config.puppeteer) || {};
 
   if (cfg.connectURL) {
@@ -201,8 +369,21 @@ function createLink(originalLink, subIds) {
     if (!state.ready) return { ok: false, code: "WORKER_NOT_READY", error: "Worker chưa khởi động.", hint: "Thử lại sau vài giây." };
     await ensureOnApp();
     if (!state.loggedIn) { await saveShot(); return { ok: false, code: "NOT_LOGGED_IN", error: "Chưa đăng nhập Shopee.", hint: "Admin cần đăng nhập lại qua noVNC tại /vnc.html." }; }
-    const res = await callPage("createLink", { originalLink, subIds });
-    if (res && res.code === "CAPTCHA") { state.lastError = "90309999"; await saveShot(); }
+
+    let res = await callPage("createLink", { originalLink, subIds });
+
+    // FETCH_ERROR: trang bị redirect sang captcha khi đang gọi API
+    // CAPTCHA (90309999): API trả captcha flag — cả 2 trường hợp thử auto-solve rồi retry 1 lần
+    if (res && (res.code === "CAPTCHA" || res.code === "FETCH_ERROR")) {
+      state.lastError = "90309999";
+      await saveShot();
+      const solved = await solveCaptcha();
+      if (solved.solved) {
+        await ensureOnApp();
+        res = await callPage("createLink", { originalLink, subIds });
+        if (res && res.code === "CAPTCHA") state.lastError = "90309999";
+      }
+    }
     return res;
   });
 }
