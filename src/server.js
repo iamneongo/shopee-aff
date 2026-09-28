@@ -30,7 +30,7 @@ app.use("/api", (req, res, next) => {
 const wrap = (fn) => (req, res) =>
   Promise.resolve(fn(req, res)).catch((err) => {
     const status = err instanceof ShopeeError && err.status ? err.status : 500;
-    res.status(status).json({ ok: false, error: err.message, code: err.code, raw: err.data });
+    res.status(status).json({ ok: false, code: err.code || "INTERNAL_ERROR", error: err.message });
   });
 
 // ===== Health check =====
@@ -95,15 +95,46 @@ app.get(
   }),
 );
 
+// Sub_Id Shopee chỉ chấp nhận [a-zA-Z0-9], tối đa 40 ký tự
+const SUBID_RE = /^[a-zA-Z0-9]{1,40}$/;
+function validateSubId(value, field) {
+  if (!value) return;
+  if (!SUBID_RE.test(value)) {
+    throw new ShopeeError(
+      `${field} không hợp lệ: "${value}". Chỉ được dùng chữ và số [a-zA-Z0-9], tối đa 40 ký tự, không dấu gạch dưới hay ký tự đặc biệt.`,
+      { status: 400, code: "INVALID_SUBID" },
+    );
+  }
+}
+
+// HTTP status phù hợp cho từng mã lỗi worker
+const ERROR_STATUS = {
+  WORKER_NOT_READY: 503,
+  NOT_LOGGED_IN:    503,
+  CAPTCHA:          503,
+  FETCH_ERROR:      503,
+  PAGE_NAVIGATED:   503,
+  MISSING_LINK:     400,
+  INVALID_SUBID:    400,
+};
+
 // ===== Tạo affiliate link (cashback) =====
 // POST /api/link  body: { originalLink, userId?, subIds? }
-// - userId: mã người dùng nhận cashback -> gắn vào subId1 để quy đơn khi có báo cáo.
+// - userId: mã người dùng nhận cashback -> gắn vào subId1, chỉ [a-zA-Z0-9].
 // - subIds: ghi đè/bổ sung subId1..subId5 (ưu tiên hơn defaultSubIds; userId thắng subId1).
 app.post(
   "/api/link",
   wrap(async (req, res) => {
     const { originalLink, userId, subIds } = req.body || {};
-    if (!originalLink) throw new ShopeeError("Thiếu originalLink.", { status: 400 });
+    if (!originalLink) throw new ShopeeError("Thiếu originalLink.", { status: 400, code: "MISSING_LINK" });
+
+    // Validate trước khi gọi Shopee
+    if (userId != null) validateSubId(String(userId).trim(), "userId");
+    if (subIds && typeof subIds === "object") {
+      for (const [k, v] of Object.entries(subIds)) {
+        if (v) validateSubId(String(v), k);
+      }
+    }
 
     let cfg = {};
     try { cfg = loadConfig(); } catch {}
@@ -116,14 +147,19 @@ app.post(
 
     const result = await worker.createLink(originalLink, finalSubIds);
     if (!result || !result.ok) {
-      // Báo động để bạn vào giải captcha / đăng nhập lại
-      if (result && result.code === 90309999) {
-        notifier.notify("captcha", "⚠️ Shopee bắt CAPTCHA (90309999). Vào Chrome bot tạo 1 link qua giao diện để giải, rồi thử lại.", worker.SHOT);
-      } else if (result && /đăng nhập/i.test(result.error || "")) {
-        notifier.notify("login", "⚠️ Shopee CHƯA ĐĂNG NHẬP. Mở Chrome bot và đăng nhập lại.", worker.SHOT);
+      const code = (result && result.code) || "SHOPEE_ERROR";
+      // Báo động để admin vào giải captcha / đăng nhập lại
+      if (code === "CAPTCHA") {
+        notifier.notify("captcha", "⚠️ Shopee bắt CAPTCHA. Vào noVNC tạo 1 link qua giao diện để giải, rồi thử lại.", worker.SHOT);
+      } else if (code === "NOT_LOGGED_IN") {
+        notifier.notify("login", "⚠️ Shopee CHƯA ĐĂNG NHẬP. Mở noVNC và đăng nhập lại.", worker.SHOT);
       }
-      throw new ShopeeError((result && result.error) || "Không tạo được link.", {
-        code: result && result.code, data: result && result.raw, status: 502,
+      const status = ERROR_STATUS[code] || 502;
+      return res.status(status).json({
+        ok: false,
+        code,
+        error: (result && result.error) || "Không tạo được link.",
+        ...(result && result.hint ? { hint: result.hint } : {}),
       });
     }
     res.json({
@@ -132,7 +168,6 @@ app.post(
       subIds: finalSubIds,
       shortLink: result.shortLink,
       longLink: result.longLink,
-      raw: result.raw,
     });
   }),
 );
@@ -146,7 +181,10 @@ app.get(
       pageNum: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.size ? Number(req.query.size) : undefined,
     });
-    if (!r || r.ok === false) throw new ShopeeError((r && r.error) || "Lỗi lấy báo cáo.", { code: r && r.code, status: 502 });
+    if (!r || r.ok === false) {
+      const code = (r && r.code) || "SHOPEE_ERROR";
+      return res.status(ERROR_STATUS[code] || 502).json({ ok: false, code, error: (r && r.error) || "Lỗi lấy báo cáo.", ...(r && r.hint ? { hint: r.hint } : {}) });
+    }
     res.json({ ok: true, total: r.total, list: r.list });
   }),
 );
@@ -158,7 +196,10 @@ app.get(
     const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
     const days = req.query.days ? Number(req.query.days) : 7;
     const r = await worker.getReport({ days, pageSize: 100 });
-    if (!r || r.ok === false) throw new ShopeeError((r && r.error) || "Lỗi lấy báo cáo.", { code: r && r.code, status: 502 });
+    if (!r || r.ok === false) {
+      const code = (r && r.code) || "SHOPEE_ERROR";
+      return res.status(ERROR_STATUS[code] || 502).json({ ok: false, code, error: (r && r.error) || "Lỗi lấy báo cáo.", ...(r && r.hint ? { hint: r.hint } : {}) });
+    }
     const matched = (r.list || []).filter((item) => {
       const subs = item.sub_ids || item.subIds || [];
       return subIds.some((id) => subs.includes(id));

@@ -52,7 +52,7 @@ function pageDo(action, params) {
     return m ? decodeURIComponent(m[1]) : "";
   }
   async function createLink(originalLink, subIds) {
-    if (!originalLink) return { ok: false, error: "Thiếu link gốc." };
+    if (!originalLink) return { ok: false, code: "MISSING_LINK", error: "Thiếu originalLink." };
     const body = {
       operationName: "batchGetCustomLink",
       query:
@@ -69,9 +69,21 @@ function pageDo(action, params) {
     });
     const data = await res.json().catch(() => ({}));
     const errCode = data && (data.error != null ? data.error : data.err_code);
-    if (errCode) return { ok: false, code: errCode, error: "Shopee lỗi " + errCode, raw: data };
+    if (errCode) {
+      if (errCode === 90309999) return { ok: false, code: "CAPTCHA", error: "Shopee yêu cầu xác thực CAPTCHA.", hint: "Admin cần vào noVNC giải captcha rồi tạo 1 link qua giao diện.", raw: data };
+      return { ok: false, code: "SHOPEE_" + errCode, error: "Shopee trả lỗi: " + errCode + ".", raw: data };
+    }
     const item = data && data.data && data.data.batchCustomLink && data.data.batchCustomLink[0];
-    if (!item || (!item.shortLink && item.failCode)) return { ok: false, error: "Không tạo được link (failCode " + (item && item.failCode) + ").", raw: data };
+    if (!item || (!item.shortLink && item.failCode != null)) {
+      const fc = item && item.failCode;
+      const FC_MSG = {
+        1: "Link đã được chuyển đổi trước đó.",
+        2: "URL không đúng định dạng Shopee. Dùng link trực tiếp từ shopee.vn (dạng https://shopee.vn/ten-san-pham.i.shopId.itemId).",
+        3: "Shopee từ chối link: URL không hợp lệ, sản phẩm không trong chương trình affiliate, hoặc Sub_Id chứa ký tự không hợp lệ (chỉ [a-zA-Z0-9]).",
+        4: "Vượt giới hạn tạo link của Shopee. Thử lại sau ít phút.",
+      };
+      return { ok: false, code: "SHOPEE_FAIL_" + fc, error: FC_MSG[fc] || ("Shopee từ chối tạo link (failCode " + fc + ")."), raw: data };
+    }
     return { ok: true, shortLink: item.shortLink, longLink: item.longLink, raw: data };
   }
   async function getReport(o) {
@@ -83,7 +95,10 @@ function pageDo(action, params) {
     const res = await fetch(url, { credentials: "include", headers: { "affiliate-program-type": "1", "csrf-token": getCsrf() } });
     const data = await res.json().catch(() => ({}));
     const errCode = data && (data.error != null ? data.error : data.err_code);
-    if (errCode) return { ok: false, code: errCode, error: "Shopee lỗi " + errCode };
+    if (errCode) {
+      if (errCode === 90309999) return { ok: false, code: "CAPTCHA", error: "Shopee yêu cầu xác thực CAPTCHA.", hint: "Admin cần vào noVNC giải captcha." };
+      return { ok: false, code: "SHOPEE_" + errCode, error: "Shopee trả lỗi: " + errCode + "." };
+    }
     const list = (data && data.data && data.data.list) || data.list || [];
     return { ok: true, total: list.length, list };
   }
@@ -124,9 +139,14 @@ async function ensureOnApp() {
 }
 
 async function callPage(action, params) {
-  if (!page) return { ok: false, error: "Worker chưa sẵn sàng." };
+  if (!page) return { ok: false, code: "WORKER_NOT_READY", error: "Worker chưa sẵn sàng.", hint: "Thử lại sau vài giây." };
   try { return await page.evaluate(pageDo, action, params || {}); }
-  catch (e) { return { ok: false, error: "evaluate lỗi: " + e.message }; }
+  catch (e) {
+    const msg = (e.message || "").split("\n")[0];
+    if (/Failed to fetch/i.test(msg)) return { ok: false, code: "FETCH_ERROR", error: "Chrome không thể kết nối đến Shopee.", hint: "Gọi GET /api/worker/open-login để điều hướng lại, rồi thử lại." };
+    if (/Execution context was destroyed/i.test(msg)) return { ok: false, code: "PAGE_NAVIGATED", error: "Trang bị điều hướng trong khi xử lý.", hint: "Thử lại ngay." };
+    return { ok: false, code: "EVALUATE_ERROR", error: "Lỗi thực thi trong Chrome: " + msg };
+  }
 }
 
 async function init(config) {
@@ -178,20 +198,20 @@ async function init(config) {
 
 function createLink(originalLink, subIds) {
   return enqueue(async () => {
-    if (!state.ready) return { ok: false, error: "Worker chưa khởi động." };
+    if (!state.ready) return { ok: false, code: "WORKER_NOT_READY", error: "Worker chưa khởi động.", hint: "Thử lại sau vài giây." };
     await ensureOnApp();
-    if (!state.loggedIn) { await saveShot(); return { ok: false, error: "Chưa đăng nhập Shopee. Gọi /api/worker/open-login rồi đăng nhập (headful/VNC)." }; }
+    if (!state.loggedIn) { await saveShot(); return { ok: false, code: "NOT_LOGGED_IN", error: "Chưa đăng nhập Shopee.", hint: "Admin cần đăng nhập lại qua noVNC tại /vnc.html." }; }
     const res = await callPage("createLink", { originalLink, subIds });
-    if (res && res.code === 90309999) { state.lastError = "90309999"; await saveShot(); }
+    if (res && res.code === "CAPTCHA") { state.lastError = "90309999"; await saveShot(); }
     return res;
   });
 }
 
 function getReport(opts) {
   return enqueue(async () => {
-    if (!state.ready) return { ok: false, error: "Worker chưa khởi động." };
+    if (!state.ready) return { ok: false, code: "WORKER_NOT_READY", error: "Worker chưa khởi động.", hint: "Thử lại sau vài giây." };
     await ensureOnApp();
-    if (!state.loggedIn) return { ok: false, error: "Chưa đăng nhập Shopee." };
+    if (!state.loggedIn) return { ok: false, code: "NOT_LOGGED_IN", error: "Chưa đăng nhập Shopee.", hint: "Admin cần đăng nhập lại qua noVNC." };
     return callPage("getReport", opts || {});
   });
 }
