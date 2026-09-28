@@ -91,3 +91,74 @@ Tên các secret: `apiKey` (header `x-api-key` gọi API), `VNC_PASSWORD` (đăn
 - File `.sh` phải LF (đã có `.gitattributes`) để chạy trong container Linux.
 - KHÔNG commit `config.json`, `.chrome-profile/`, `worker-screen.png`, `captcha.png` (đã .gitignore).
 - Lịch sử git commit đầu (`8adffff`) còn cookie cũ hardcode — cân nhắc để repo private hoặc dọn history.
+
+## 11. Tích hợp vào hệ thống cashback
+API này là **lớp tạo link + đọc báo cáo**. Hệ thống cashback (backend riêng của bạn) đứng TRƯỚC nó và lo phần user/ví/đối soát. API này KHÔNG lưu user, KHÔNG tính tiền — chỉ nhận `userId` để gắn vào SubId.
+
+### Luồng tổng thể
+```
+User bấm "lấy link" ─▶ Cashback Backend ─POST /api/link {originalLink,userId}─▶ Shopee Aff API ─▶ shortLink
+User mua qua shortLink ─▶ Shopee ghi nhận đơn (kèm sub_ids)
+Cron đối soát ─GET /api/report─▶ lọc theo sub_ids[0]=userId ─▶ cộng cashback vào ví user
+```
+
+### 11.1 Tạo link (khi user yêu cầu)
+- Gọi `POST /api/link` với `userId` = mã user trong hệ thống cashback bạn → API gắn vào `subId1`.
+- **Nên cache/dedupe**: lưu `(userId, originalLink) → shortLink` ở DB của bạn; lần sau trả từ cache, KHÔNG gọi lại API (giảm tải Chrome + tránh anti-bot). Link Shopee là vĩnh viễn.
+```js
+async function getCashbackLink(userId, originalLink) {
+  const cached = await db.links.findOne({ userId, originalLink });
+  if (cached) return cached.shortLink;
+  const r = await fetch(process.env.SHOPEE_API + "/api/link", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": process.env.SHOPEE_API_KEY },
+    body: JSON.stringify({ originalLink, userId }),
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error("link fail: " + j.error + " (code " + j.code + ")");
+  await db.links.insert({ userId, originalLink, shortLink: j.shortLink, at: Date.now() });
+  return j.shortLink;
+}
+```
+
+### 11.2 Đối soát & cộng cashback (cron định kỳ)
+- Chạy cron (vd mỗi 30–60 phút) gọi `GET /api/report?days=N` (hoặc `/api/report/by-subid?subIds=<userId>` cho 1 user).
+- Mỗi item trong `list` có (tên trường có 2 biến thể, dùng `a || b`): `order_sn`/`orderId`, `sub_ids`/`subIds`, `commission`/`estimated_commission`, `order_status`/`display_order_status`, `purchase_time`, `shop_name`, `item_name`.
+- **Quy user:** `subId1` (phần tử đầu `sub_ids`) chính là `userId`.
+```js
+async function reconcile() {
+  const r = await fetch(process.env.SHOPEE_API + "/api/report?days=14&size=100",
+    { headers: { "x-api-key": process.env.SHOPEE_API_KEY } }).then(x => x.json());
+  if (!r.ok) { /* alert admin, KHÔNG retry dồn dập */ return; }
+  for (const o of r.list) {
+    const orderSn = o.order_sn || o.orderId;
+    const subs = o.sub_ids || o.subIds || [];
+    const userId = subs[0];                     // = subId1
+    const commission = Number(o.commission || o.estimated_commission || 0);
+    const status = o.order_status || o.display_order_status;
+    if (!orderSn || !userId) continue;
+    await upsertOrder(orderSn, userId, commission, status); // idempotent theo orderSn
+  }
+}
+```
+
+### 11.3 Sổ cái cashback (gợi ý)
+- Bảng `cashback_orders`: `order_sn` (UNIQUE), `user_id`, `commission`, `status`, `cashback_amount`, `paid`(bool), `updated_at`.
+- **Idempotent theo `order_sn`**: mỗi lần cron chạy là UPSERT, không cộng trùng.
+- **Trạng thái đơn:** chỉ **trả cashback khi đơn ĐÃ XÁC NHẬN/hoàn tất**; đơn `pending` thì ghi nhận chờ; đơn **bị huỷ → thu hồi (clawback)** cashback nếu đã tạm cộng. `commission` lúc pending là *ước tính*, có thể đổi khi Shopee chốt.
+- **Tỉ lệ cashback:** `cashback_amount = commission * tỉ_lệ_chia_cho_user` (do bạn định, vd 70%).
+
+### 11.4 Xử lý lỗi khi tích hợp
+| Tình huống | Response | Backend nên làm |
+|---|---|---|
+| Thiếu `originalLink` | 400 | Lỗi input, sửa request |
+| Sai `x-api-key` | 401 | Kiểm tra config |
+| `90309999` (captcha) | 502, `code:90309999` | Báo admin vào noVNC giải; **hàng đợi lại link đó**, đừng spam retry |
+| "Chưa đăng nhập" | 502 | Báo admin đăng nhập lại qua noVNC |
+| timeout | 504 | Thử lại 1 lần sau vài giây |
+
+### 11.5 Lưu ý vận hành khi tích hợp
+- **Giãn nhịp gọi `/api/link`** (Chrome chạy tuần tự, ~1 link/lần; đừng bắn ồ ạt → dễ captcha/cờ tài khoản). Có cache thì phần lớn request không chạm API.
+- Trước khi tạo link hàng loạt, kiểm tra `GET /api/worker/status` → `loggedIn:true` mới gọi.
+- Đặt `SHOPEE_API` + `SHOPEE_API_KEY` ở backend cashback qua biến môi trường (đừng hardcode).
+- Nếu cần **tạo nhiều link/lần**: hiện chưa có endpoint batch — có thể bổ sung `POST /api/links` (mảng) dùng `batchCustomLink` để 1 lần ký tạo N link (xem mục nâng cấp tương lai).
