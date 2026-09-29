@@ -232,6 +232,12 @@ async function handleVerifyTimeout() {
   }).catch(() => false);
   if (!wentBack) await page.goBack({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
   await sleep(2000);
+  // Nếu goBack đưa về about:blank (không có lịch sử), navigate thẳng về shopee.vn
+  if (/^about:|^chrome:/.test(page.url())) {
+    console.log("[captcha] goBack về about:blank — navigate thẳng về shopee.vn...");
+    await page.goto("https://shopee.vn", { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+    await sleep(3000);
+  }
   return true;
 }
 
@@ -261,29 +267,37 @@ async function solveCaptcha(maxRetries = 3) {
         page.$(SLIDER_SEL).catch(() => null),
       ]);
 
-      // Fallback: nếu đang ở trang verify/captcha của Shopee, dùng kích thước ảnh để phát hiện
+      // Fallback: captcha Shopee thường render bằng <canvas>, không phải <img>
       if (!bgHandle && /verify|captcha/i.test(page.url())) {
-        const { bgH, pieceH } = await page.evaluate(() => {
-          const imgs = Array.from(document.querySelectorAll("img"))
-            .filter(img => img.naturalWidth > 50 && img.naturalHeight > 30 && img.offsetParent !== null);
-          imgs.sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
-          // Dump info for debugging
-          console.log("[captcha-debug] imgs found:", imgs.map(i => `${i.naturalWidth}x${i.naturalHeight} cls=${i.className}`).join(" | "));
-          if (imgs.length >= 2) return { bgIdx: 0, pieceIdx: 1 };
-          return {};
-        }).catch(() => ({}));
-
-        const allImgs = await page.$$("img").catch(() => []);
-        const visible = [];
-        for (const img of allImgs) {
-          const box = await img.boundingBox().catch(() => null);
-          if (box && box.width > 50 && box.height > 30) visible.push({ img, area: box.width * box.height });
+        // Ưu tiên canvas (Shopee "Verify to Continue" dùng canvas)
+        const allCanvas = await page.$$("canvas").catch(() => []);
+        const visibleCanvas = [];
+        for (const c of allCanvas) {
+          const box = await c.boundingBox().catch(() => null);
+          if (box && box.width > 50 && box.height > 30) visibleCanvas.push({ img: c, area: box.width * box.height });
         }
-        visible.sort((a, b) => b.area - a.area);
-        if (visible.length >= 1) {
-          bgHandle = visible[0].img;
-          pieceHandle = visible.length >= 2 ? visible[1].img : null;
-          console.log(`[captcha] Dùng fallback img (${visible.length} visible imgs).`);
+        visibleCanvas.sort((a, b) => b.area - a.area);
+        console.log(`[captcha] Fallback: ${allCanvas.length} canvas (${visibleCanvas.length} visible), page=${page.url().split("?")[0]}`);
+
+        if (visibleCanvas.length >= 1) {
+          bgHandle = visibleCanvas[0].img;
+          pieceHandle = visibleCanvas.length >= 2 ? visibleCanvas[1].img : null;
+          console.log(`[captcha] Dùng fallback canvas (bg=${visibleCanvas[0] && visibleCanvas[0].area}px²).`);
+        } else {
+          // Thử img nếu không có canvas
+          const allImgs = await page.$$("img").catch(() => []);
+          const visibleImgs = [];
+          for (const img of allImgs) {
+            const box = await img.boundingBox().catch(() => null);
+            if (box && box.width > 50 && box.height > 30) visibleImgs.push({ img, area: box.width * box.height });
+          }
+          visibleImgs.sort((a, b) => b.area - a.area);
+          console.log(`[captcha] Fallback: ${allImgs.length} img (${visibleImgs.length} visible).`);
+          if (visibleImgs.length >= 1) {
+            bgHandle = visibleImgs[0].img;
+            pieceHandle = visibleImgs.length >= 2 ? visibleImgs[1].img : null;
+            console.log(`[captcha] Dùng fallback img (bg=${visibleImgs[0] && visibleImgs[0].area}px²).`);
+          }
         }
       }
 
