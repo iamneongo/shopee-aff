@@ -4,6 +4,7 @@ const { loadConfig } = require("./config");
 const worker = require("./puppeteerWorker");
 const notifier = require("./notifier");
 const { ShopeeError } = require("./shopee");
+const proxyManager = require("./proxyManager");
 
 const app = express();
 app.use(express.json());
@@ -45,6 +46,7 @@ app.get("/health", (req, res) => {
       "GET  /api/report/by-subid ?subIds=web,test&days=7",
       "GET  /api/worker/status",
       "GET  /api/worker/open-login   (mở/điều hướng trang đăng nhập)",
+      "GET  /api/worker/rotate-proxy (lấy proxy VN miễn phí + restart Chrome)",
       "GET  /api/worker/screenshot.png",
     ],
   });
@@ -65,6 +67,20 @@ app.get(
   wrap(async (req, res) => {
     const r = await worker.navigate(req.query.url || "https://affiliate.shopee.vn/offer/custom_link");
     res.json(r);
+  }),
+);
+
+// Tự động lấy proxy VN miễn phí từ proxy5.net rồi khởi động lại Chrome với proxy đó.
+// Dùng khi IP bị Shopee bắt captcha liên tục. Chrome sẽ tắt ~5-10 giây rồi mở lại.
+app.get(
+  "/api/worker/rotate-proxy",
+  wrap(async (req, res) => {
+    const proxyUrl = await proxyManager.getWorkingProxy();
+    if (!proxyUrl) {
+      return res.status(503).json({ ok: false, code: "NO_PROXY", error: "Không tìm thấy proxy VN nào hoạt động từ proxy5.net." });
+    }
+    const status = await worker.restartWithProxy(proxyUrl);
+    res.json({ ok: true, proxy: proxyUrl, ...status });
   }),
 );
 

@@ -545,4 +545,15 @@ async function shutdown() {
   browser = null; page = null; state.ready = false;
 }
 
-module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, SHOT };
+// Khởi động lại Chrome với proxy mới (hoặc không proxy nếu proxyUrl = null)
+async function restartWithProxy(proxyUrl) {
+  console.log("[worker] Khởi động lại Chrome với proxy:", proxyUrl || "(không proxy)");
+  await shutdown();
+  const newConfig = JSON.parse(JSON.stringify(fullCfg));
+  if (!newConfig.puppeteer) newConfig.puppeteer = {};
+  newConfig.puppeteer.proxy = proxyUrl || "";
+  await init(newConfig);
+  return getStatus();
+}
+
+module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, restartWithProxy, SHOT };
