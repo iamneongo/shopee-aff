@@ -146,6 +146,13 @@ const BG_SEL = [
   "[class*='puzzle-bg']",
   "[class*='captcha-bg'] img",
   "[class*='verify-panel'] img",
+  // Shopee "Verify to Continue" page selectors
+  "img.verify-bg-img",
+  "[class*='verify-bg'] img",
+  "[class*='verify-img'] img",
+  "[class*='verify-img-block'] img",
+  "[class*='img-bg'] img",
+  "img[class*='bg-img']",
 ].join(", ");
 
 const PIECE_SEL = [
@@ -153,6 +160,12 @@ const PIECE_SEL = [
   "[class*='puzzle-piece'] img",
   "[class*='puzzle-piece']",
   "[class*='captcha-piece'] img",
+  // Shopee "Verify to Continue" page selectors
+  "[class*='verify-sub'] img",
+  "[class*='sub-block'] img",
+  "img.verify-piece-img",
+  "[class*='move-piece']",
+  "[class*='verify-piece']",
 ].join(", ");
 
 const SLIDER_SEL = [
@@ -164,6 +177,10 @@ const SLIDER_SEL = [
   "[class*='captcha-slide'] button",
   "[class*='verify'] button",
   "[class*='slider'] .btn",
+  // Shopee "Verify to Continue" page selectors
+  "[class*='verify-move']",
+  "[class*='move-block']",
+  "[class*='drag-block']",
 ].join(", ");
 
 const REFRESH_SEL = [
@@ -235,6 +252,9 @@ async function solveCaptcha(maxRetries = 3) {
       // Nếu đang ở trang "Verification timed out" → quay lại captcha trước
       await handleVerifyTimeout();
 
+      // Đợi captcha load (trang có thể đang navigate sau khi API trả 90309999)
+      await page.waitForSelector(BG_SEL, { timeout: 6000 }).catch(() => {});
+
       const [bgHandle, pieceHandle, sliderHandle] = await Promise.all([
         page.$(BG_SEL).catch(() => null),
         page.$(PIECE_SEL).catch(() => null),
@@ -242,7 +262,7 @@ async function solveCaptcha(maxRetries = 3) {
       ]);
 
       if (!bgHandle) {
-        console.log("[captcha] Không tìm thấy puzzle — không có captcha hoặc selector cần cập nhật.");
+        console.log(`[captcha] Không tìm thấy puzzle (url=${page.url()}) — không có captcha hoặc selector cần cập nhật.`);
         return { solved: false, reason: "captcha_not_found", attempts: attempt };
       }
 

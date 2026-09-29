@@ -35,8 +35,7 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/iamneongo/shopee-aff:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
       - name: Trigger Dokploy redeploy
         run: |
