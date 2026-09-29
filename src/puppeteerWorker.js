@@ -255,7 +255,7 @@ async function solveCaptcha(maxRetries = 3) {
       // Đợi captcha load (trang có thể đang navigate sau khi API trả 90309999)
       await page.waitForSelector(BG_SEL, { timeout: 6000 }).catch(() => {});
 
-      const [bgHandle, pieceHandle, sliderHandle] = await Promise.all([
+      let [bgHandle, pieceHandle, sliderHandle] = await Promise.all([
         page.$(BG_SEL).catch(() => null),
         page.$(PIECE_SEL).catch(() => null),
         page.$(SLIDER_SEL).catch(() => null),
@@ -507,49 +507,31 @@ function isCaptchaError(res) {
 }
 
 async function autoRecoverAndRetry(originalLink, subIds) {
-  // Bước 1: thử giải captcha (tối đa 3 lần, mỗi lần refresh puzzle)
   state.lastError = "90309999";
   await saveShot();
-  const captchaResult = await solveCaptcha();
-  if (captchaResult.solved) {
-    await ensureOnApp();
-    const res = await callPage("createLink", { originalLink, subIds });
-    if (!isCaptchaError(res)) return res;
-  }
 
-  // Bước 2: captcha giải thất bại → tự đổi proxy VN rồi restart Chrome
-  console.log("[worker] Captcha không giải được — đang đổi proxy VN tự động...");
-  const proxyUrl = await proxyManager.getWorkingProxy().catch((e) => {
-    console.error("[worker] Lỗi lấy proxy:", e.message);
-    return null;
-  });
-
-  if (!proxyUrl) {
-    console.log("[worker] Không tìm được proxy VN — trả lỗi CAPTCHA.");
-    return { ok: false, code: "CAPTCHA", error: "Shopee yêu cầu xác thực CAPTCHA và không tìm được proxy VN để đổi IP.", hint: "Admin vào noVNC giải captcha thủ công." };
-  }
-
-  console.log(`[worker] Restart Chrome với proxy ${proxyUrl}...`);
-  await restartWithProxy(proxyUrl);
-
-  if (!state.loggedIn) {
-    return { ok: false, code: "NOT_LOGGED_IN", error: "Sau khi đổi proxy Chrome cần đăng nhập lại Shopee.", hint: "Admin đăng nhập lại qua noVNC rồi thử lại." };
-  }
-
-  // Bước 3: thử tạo link trên IP mới
+  // 90309999 là rate-limit/anti-bot ở API level — đợi vài giây rồi thử lại.
+  // Nếu trang bị redirect sang verify/captcha thì solveCaptcha xử lý.
+  console.log("[worker] CAPTCHA/anti-bot từ Shopee — chờ 5s rồi retry...");
+  await sleep(5000);
   await ensureOnApp();
-  const resAfterProxy = await callPage("createLink", { originalLink, subIds });
-  if (!isCaptchaError(resAfterProxy)) return resAfterProxy;
+  const retryRes = await callPage("createLink", { originalLink, subIds });
+  if (!isCaptchaError(retryRes)) return retryRes;
 
-  // Bước 4: IP mới vẫn bị captcha → thử giải một lần nữa
-  console.log("[worker] IP mới vẫn bị captcha — thử giải lần cuối...");
-  const solved2 = await solveCaptcha();
-  if (solved2.solved) {
-    await ensureOnApp();
-    return await callPage("createLink", { originalLink, subIds });
+  // Nếu có captcha UI (trang bị redirect sang verify/captcha), thử giải tự động
+  if (/verify|captcha/i.test(page.url())) {
+    console.log("[worker] Phát hiện trang verify — thử giải captcha...");
+    const captchaResult = await solveCaptcha();
+    if (captchaResult.solved) {
+      await ensureOnApp();
+      const res = await callPage("createLink", { originalLink, subIds });
+      if (!isCaptchaError(res)) return res;
+    }
   }
 
-  return { ok: false, code: "CAPTCHA", error: "Shopee vẫn yêu cầu CAPTCHA sau khi đổi proxy VN.", hint: "Thử gọi GET /api/worker/rotate-proxy hoặc admin vào noVNC giải tay." };
+  // Không giải được → trả lỗi (session vẫn giữ nguyên, không rotate proxy)
+  console.log("[worker] Không giải được CAPTCHA — trả lỗi, giữ session.");
+  return { ok: false, code: "CAPTCHA", error: "Shopee yêu cầu xác thực CAPTCHA.", hint: "Admin vào noVNC tại https://shopee-vnc.apps.neooi.com để giải captcha thủ công rồi thử lại." };
 }
 
 function createLink(originalLink, subIds) {
@@ -561,7 +543,7 @@ function createLink(originalLink, subIds) {
     const res = await callPage("createLink", { originalLink, subIds });
     if (!isCaptchaError(res)) return res;
 
-    // Tự động phục hồi: giải captcha → đổi proxy → retry
+    // Tự động phục hồi: chờ, retry, thử giải captcha nếu có UI
     return autoRecoverAndRetry(originalLink, subIds);
   });
 }
