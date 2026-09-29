@@ -269,10 +269,17 @@ async function clickRefreshCaptcha() {
 
 // Xử lý trang "Verification timed out" — click Go Back để quay lại trang captcha
 async function handleVerifyTimeout() {
-  const isTimeout = await page.evaluate(() =>
-    /Verification timed out/i.test(document.body ? document.body.innerText : "")
-  ).catch(() => false);
-  if (!isTimeout) return false;
+  const result = await page.evaluate(() => {
+    const isTimeout = /Verification timed out/i.test(document.body ? document.body.innerText : "");
+    // Nếu captcha canvas đang active, không phải thực sự timeout
+    const hasCaptchaCanvas = document.querySelectorAll("canvas").length > 0;
+    return { isTimeout, hasCaptchaCanvas };
+  }).catch(() => ({ isTimeout: false, hasCaptchaCanvas: false }));
+  if (!result.isTimeout) return false;
+  if (result.hasCaptchaCanvas) {
+    console.log("[captcha] 'Verification timed out' text nhưng captcha canvas vẫn active — bỏ qua.");
+    return false;
+  }
   console.log("[captcha] Phát hiện 'Verification timed out' — đang quay lại...");
   const wentBack = await page.evaluate(() => {
     const btn = Array.from(document.querySelectorAll("button"))
@@ -282,9 +289,8 @@ async function handleVerifyTimeout() {
   }).catch(() => false);
   if (!wentBack) await page.goBack({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
   await sleep(2000);
-  // Nếu goBack đưa về about:blank (không có lịch sử), navigate thẳng về shopee.vn
   if (/^about:|^chrome:/.test(page.url())) {
-    console.log("[captcha] goBack về about:blank — navigate thẳng về shopee.vn...");
+    console.log("[captcha] goBack về about:blank — navigate về shopee.vn...");
     await page.goto("https://shopee.vn", { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
     await sleep(3000);
   }
@@ -339,7 +345,8 @@ async function solveCaptcha(maxRetries = 3) {
         await page.mouse.move(startX + i, startY + Math.log(1 + i) * 0.3);
         await sleep(40 + Math.random() * 20);
       }
-      console.log("[captcha] Đã kéo 10px — lấy ảnh từ img.src...");
+      console.log("[captcha] Đã kéo 10px — đợi piece render...");
+      await sleep(600); // đợi canvas cập nhật (per SadCaptcha library: time.sleep(0.5))
 
       // Bước 2: Lấy ảnh từ DOM (src attribute = data URL)
       const imgs = await getImagesFromPageDOM();
@@ -351,24 +358,33 @@ async function solveCaptcha(maxRetries = 3) {
       let bgWidth = imgs.bgWidth;
 
       if (!bgB64) {
-        console.log("[captcha] Không có data URL — screenshot canvas elements...");
-        // Shopee captcha dùng canvas: bg (EkGpDI ~280x150) + piece (_0N0-Dn ~59x58)
-        const allCanvas = await page.$$("canvas").catch(() => []);
-        const canvasItems = [];
-        for (const c of allCanvas) {
-          const box = await c.boundingBox().catch(() => null);
-          if (box && box.width > 20 && box.height > 20) canvasItems.push({ el: c, box });
-        }
-        // Sắp xếp theo diện tích: lớn nhất = bg, nhỏ hơn = piece
-        canvasItems.sort((a, b) => (b.box.width * b.box.height) - (a.box.width * a.box.height));
-        if (canvasItems.length > 0) {
-          bgB64 = await canvasItems[0].el.screenshot({ encoding: "base64" }).catch(() => null);
-          bgWidth = canvasItems[0].box.width;
-          console.log(`[captcha] Canvas bg: ${canvasItems[0].box.width}x${canvasItems[0].box.height}, b64=${bgB64 ? bgB64.length + "c" : "null"}`);
-        }
-        if (canvasItems.length > 1 && !pieceB64) {
-          pieceB64 = await canvasItems[1].el.screenshot({ encoding: "base64" }).catch(() => null);
-          console.log(`[captcha] Canvas piece: ${canvasItems[1].box.width}x${canvasItems[1].box.height}, b64=${pieceB64 ? pieceB64.length + "c" : "null"}`);
+        console.log("[captcha] Lấy canvas data qua toDataURL...");
+        // Dùng evaluate để lấy toDataURL() — raw pixel data, không bị CSS scaling
+        const canvasData = await page.evaluate(() => {
+          const els = Array.from(document.querySelectorAll("canvas"))
+            .filter(c => { const r = c.getBoundingClientRect(); return r.width * r.height > 400; })
+            .sort((a, b) => {
+              const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+              return (rb.width * rb.height) - (ra.width * ra.height);
+            });
+          const out = { bg: null, piece: null, bgW: 0, bgH: 0, pieceW: 0, pieceH: 0 };
+          if (els.length > 0) {
+            try { out.bg = els[0].toDataURL("image/png").split(",")[1]; } catch (e) {}
+            out.bgW = els[0].width;   // intrinsic canvas width (px, không phải CSS)
+            out.bgH = els[0].height;
+          }
+          if (els.length > 1) {
+            try { out.piece = els[1].toDataURL("image/png").split(",")[1]; } catch (e) {}
+            out.pieceW = els[1].width;
+            out.pieceH = els[1].height;
+          }
+          return out;
+        }).catch(() => null);
+        if (canvasData) {
+          bgB64 = canvasData.bg;
+          pieceB64 = canvasData.piece;
+          bgWidth = canvasData.bgW; // intrinsic width cho tính dist
+          console.log(`[captcha] Canvas: bg=${canvasData.bgW}x${canvasData.bgH}(b64=${bgB64 ? bgB64.length + "c" : "null"}), piece=${canvasData.pieceW}x${canvasData.pieceH}(b64=${pieceB64 ? pieceB64.length + "c" : "null"})`);
         }
       }
 
