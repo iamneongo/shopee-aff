@@ -9,6 +9,10 @@ SCREEN="${SCREEN_SIZE:-1280x900x24}"
 # Dọn lock cũ nếu container restart
 rm -f /tmp/.X99-lock 2>/dev/null || true
 
+# Xóa Chrome SingletonLock từ lần chạy trước (tránh Code:21 khi container mới dùng volume cũ)
+CHROME_PROFILE="${CHROME_PROFILE_DIR:-/data/chrome-profile}"
+rm -f "$CHROME_PROFILE/SingletonLock" "$CHROME_PROFILE/SingletonCookie" "$CHROME_PROFILE/SingletonSocket" 2>/dev/null || true
+
 echo "[entrypoint] starting Xvfb :99 ($SCREEN)"
 Xvfb :99 -screen 0 "$SCREEN" -ac +extension RANDR >/var/log/xvfb.log 2>&1 &
 sleep 1
