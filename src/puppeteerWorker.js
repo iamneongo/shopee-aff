@@ -139,9 +139,88 @@ async function callSadCaptchaApi(apiKey, puzzleImageB64, pieceImageB64) {
   });
 }
 
+const BG_SEL = [
+  "img.sesl-puzzle-bg",
+  "[class*='puzzle-bg'] img",
+  "[class*='puzzle-bg']",
+  "[class*='captcha-bg'] img",
+  "[class*='verify-panel'] img",
+].join(", ");
+
+const PIECE_SEL = [
+  "img.sesl-puzzle-piece",
+  "[class*='puzzle-piece'] img",
+  "[class*='puzzle-piece']",
+  "[class*='captcha-piece'] img",
+].join(", ");
+
+const SLIDER_SEL = [
+  ".sesl-slider-btn",
+  "[class*='slider-btn']",
+  "[class*='slide-btn']",
+  "[class*='slider-handle']",
+  "[class*='drag-btn']",
+  "[class*='captcha-slide'] button",
+  "[class*='verify'] button",
+  "[class*='slider'] .btn",
+].join(", ");
+
+const REFRESH_SEL = [
+  "[class*='refresh']",
+  "[class*='reload']",
+  "[class*='captcha-refresh']",
+  "[class*='verify-refresh']",
+  "svg[class*='refresh']",
+].join(", ");
+
+// Nhấn nút refresh (↺) để lấy puzzle mới — dùng khi lần giải trước thất bại
+async function clickRefreshCaptcha() {
+  try {
+    // thử selector trực tiếp
+    const btn = await page.$(REFRESH_SEL).catch(() => null);
+    if (btn) { await btn.click(); await sleep(2000); return true; }
+    // fallback: duyệt DOM tìm phần tử có SVG rotate/refresh hoặc title/aria phù hợp
+    const clicked = await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll("button, [role='button'], div, span, svg"));
+      for (const el of candidates) {
+        const cls = (el.className || "").toString().toLowerCase();
+        const title = (el.title || el.getAttribute("aria-label") || "").toLowerCase();
+        if (cls.includes("refresh") || cls.includes("reload") || title.includes("refresh") || title.includes("reload")) {
+          const clickable = el.closest("button, [role='button']") || el;
+          clickable.click();
+          return true;
+        }
+      }
+      return false;
+    }).catch(() => false);
+    if (clicked) { await sleep(2000); return true; }
+  } catch {}
+  console.log("[captcha] Không tìm thấy nút refresh ↺.");
+  return false;
+}
+
+// Xử lý trang "Verification timed out" — click Go Back để quay lại trang captcha
+async function handleVerifyTimeout() {
+  const isTimeout = await page.evaluate(() =>
+    /Verification timed out/i.test(document.body ? document.body.innerText : "")
+  ).catch(() => false);
+  if (!isTimeout) return false;
+  console.log("[captcha] Phát hiện 'Verification timed out' — đang quay lại...");
+  const wentBack = await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll("button"))
+      .find(b => /go back/i.test(b.textContent || ""));
+    if (btn) { btn.click(); return true; }
+    return false;
+  }).catch(() => false);
+  if (!wentBack) await page.goBack({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+  await sleep(2000);
+  return true;
+}
+
 // Tự động phát hiện và giải Shopee slider captcha.
-// Trả về { solved: bool, reason?: string, slideXPixels?: number }
-async function solveCaptcha() {
+// Thử tối đa maxRetries lần: mỗi lần thất bại → refresh puzzle → thử lại.
+// Trả về { solved: bool, attempts: number, reason?: string }
+async function solveCaptcha(maxRetries = 3) {
   if (!page) return { solved: false, reason: "no_page" };
   const apiKey = process.env.SADCAPTCHA_API_KEY || (fullCfg.sadcaptcha && fullCfg.sadcaptcha.apiKey);
   if (!apiKey) {
@@ -149,104 +228,106 @@ async function solveCaptcha() {
     return { solved: false, reason: "no_apikey" };
   }
 
-  try {
-    // Phát hiện phần tử puzzle: background (ảnh đầy đủ có lỗ) + piece (mảnh cần ghép)
-    // Shopee dùng nhiều class tên khác nhau qua các phiên bản, thử lần lượt
-    const BG_SEL = [
-      "img.sesl-puzzle-bg",
-      "[class*='puzzle-bg'] img",
-      "[class*='puzzle-bg']",
-      "[class*='captcha-bg'] img",
-      "[class*='verify-panel'] img",
-    ].join(", ");
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(`[captcha] === Lần thử ${attempt}/${maxRetries} ===`);
+    try {
+      // Nếu đang ở trang "Verification timed out" → quay lại captcha trước
+      await handleVerifyTimeout();
 
-    const PIECE_SEL = [
-      "img.sesl-puzzle-piece",
-      "[class*='puzzle-piece'] img",
-      "[class*='puzzle-piece']",
-      "[class*='captcha-piece'] img",
-    ].join(", ");
+      const [bgHandle, pieceHandle, sliderHandle] = await Promise.all([
+        page.$(BG_SEL).catch(() => null),
+        page.$(PIECE_SEL).catch(() => null),
+        page.$(SLIDER_SEL).catch(() => null),
+      ]);
 
-    const SLIDER_SEL = [
-      ".sesl-slider-btn",
-      "[class*='slider-btn']",
-      "[class*='slide-btn']",
-      "[class*='slider-handle']",
-      "[class*='drag-btn']",
-      "[class*='captcha-slide'] button",
-      "[class*='verify'] button",
-      "[class*='slider'] .btn",
-    ].join(", ");
+      if (!bgHandle) {
+        console.log("[captcha] Không tìm thấy puzzle — không có captcha hoặc selector cần cập nhật.");
+        return { solved: false, reason: "captcha_not_found", attempts: attempt };
+      }
 
-    const [bgHandle, pieceHandle, sliderHandle] = await Promise.all([
-      page.$(BG_SEL).catch(() => null),
-      page.$(PIECE_SEL).catch(() => null),
-      page.$(SLIDER_SEL).catch(() => null),
-    ]);
+      console.log("[captcha] Phát hiện puzzle, đang chụp ảnh...");
+      const bgB64 = await bgHandle.screenshot({ encoding: "base64" }).catch(() => null);
+      const pieceB64 = pieceHandle ? await pieceHandle.screenshot({ encoding: "base64" }).catch(() => null) : null;
 
-    if (!bgHandle) {
-      console.log("[captcha] Không tìm thấy puzzle — không có captcha hoặc selector cần cập nhật.");
-      return { solved: false, reason: "captcha_not_found" };
+      if (!bgB64) {
+        console.log("[captcha] Chụp ảnh thất bại.");
+        if (attempt < maxRetries) { await clickRefreshCaptcha(); continue; }
+        return { solved: false, reason: "screenshot_failed", attempts: attempt };
+      }
+
+      console.log("[captcha] Gọi SadCaptcha API...");
+      let sadResult;
+      try {
+        sadResult = await callSadCaptchaApi(apiKey, bgB64, pieceB64);
+      } catch (e) {
+        console.error("[captcha] SadCaptcha API lỗi:", e.message);
+        if (attempt < maxRetries) { await clickRefreshCaptcha(); continue; }
+        return { solved: false, reason: e.message, attempts: attempt };
+      }
+
+      if (!sadResult || typeof sadResult.slideXPixels !== "number") {
+        console.error("[captcha] SadCaptcha response không hợp lệ:", JSON.stringify(sadResult));
+        if (attempt < maxRetries) { await clickRefreshCaptcha(); continue; }
+        return { solved: false, reason: "invalid_response", attempts: attempt };
+      }
+
+      if (!sliderHandle) {
+        console.log("[captcha] Không tìm thấy slider handle.");
+        if (attempt < maxRetries) { await clickRefreshCaptcha(); continue; }
+        return { solved: false, reason: "no_slider_handle", attempts: attempt };
+      }
+      const box = await sliderHandle.boundingBox().catch(() => null);
+      if (!box) {
+        console.log("[captcha] Slider không visible.");
+        if (attempt < maxRetries) { await clickRefreshCaptcha(); continue; }
+        return { solved: false, reason: "slider_not_visible", attempts: attempt };
+      }
+
+      const dist = sadResult.slideXPixels;
+      console.log(`[captcha] Offset: ${dist}px — đang kéo slider...`);
+
+      const startX = box.x + box.width / 2;
+      const startY = box.y + box.height / 2;
+
+      await page.mouse.move(startX, startY);
+      await sleep(80 + Math.random() * 80);
+      await page.mouse.down();
+      await sleep(60 + Math.random() * 40);
+
+      const STEPS = 35;
+      for (let i = 1; i <= STEPS; i++) {
+        const t = i / STEPS;
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+        await page.mouse.move(startX + dist * ease, startY + (Math.random() - 0.5) * 2);
+        await sleep(6 + Math.random() * 10);
+      }
+      await page.mouse.move(startX + dist, startY);
+      await sleep(120 + Math.random() * 80);
+      await page.mouse.up();
+
+      await sleep(2500);
+      await saveShot();
+
+      // Kiểm tra kết quả
+      const timedOut = await handleVerifyTimeout();
+      const stillPresent = await page.$(BG_SEL).catch(() => null);
+
+      if (!stillPresent && !timedOut) {
+        console.log(`[captcha] ✅ Giải thành công lần ${attempt}!`);
+        return { solved: true, slideXPixels: dist, attempts: attempt };
+      }
+
+      console.log(`[captcha] ⚠️ Lần ${attempt} thất bại${timedOut ? " (Shopee timeout)" : " (puzzle vẫn còn)"}.`);
+      if (attempt < maxRetries) await clickRefreshCaptcha();
+
+    } catch (e) {
+      console.error(`[captcha] Lỗi lần ${attempt}:`, e.message);
+      if (attempt < maxRetries) { await sleep(1500); await clickRefreshCaptcha(); }
     }
-
-    console.log("[captcha] Phát hiện slider captcha, đang chụp ảnh...");
-
-    // Chụp từng element (đáng tin cậy hơn fetch URL vì tránh vấn đề CORS/auth)
-    const bgB64 = await bgHandle.screenshot({ encoding: "base64" }).catch(() => null);
-    const pieceB64 = pieceHandle ? await pieceHandle.screenshot({ encoding: "base64" }).catch(() => null) : null;
-
-    if (!bgB64) return { solved: false, reason: "screenshot_failed" };
-
-    console.log("[captcha] Gọi SadCaptcha API...");
-    const sadResult = await callSadCaptchaApi(apiKey, bgB64, pieceB64);
-
-    if (!sadResult || typeof sadResult.slideXPixels !== "number") {
-      console.error("[captcha] SadCaptcha response không hợp lệ:", JSON.stringify(sadResult));
-      return { solved: false, reason: "invalid_response", detail: sadResult };
-    }
-
-    const dist = sadResult.slideXPixels;
-    console.log(`[captcha] Offset từ SadCaptcha: ${dist}px — đang kéo slider...`);
-
-    if (!sliderHandle) return { solved: false, reason: "no_slider_handle" };
-    const box = await sliderHandle.boundingBox().catch(() => null);
-    if (!box) return { solved: false, reason: "slider_not_visible" };
-
-    const startX = box.x + box.width / 2;
-    const startY = box.y + box.height / 2;
-
-    // Kéo với chuyển động ease-in-out + nhiễu nhỏ để trông tự nhiên
-    await page.mouse.move(startX, startY);
-    await sleep(80 + Math.random() * 80);
-    await page.mouse.down();
-    await sleep(60 + Math.random() * 40);
-
-    const STEPS = 35;
-    for (let i = 1; i <= STEPS; i++) {
-      const t = i / STEPS;
-      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-      await page.mouse.move(startX + dist * ease, startY + (Math.random() - 0.5) * 2);
-      await sleep(6 + Math.random() * 10);
-    }
-    await page.mouse.move(startX + dist, startY);
-    await sleep(120 + Math.random() * 80);
-    await page.mouse.up();
-
-    await sleep(2500);
-    await saveShot();
-
-    // Kiểm tra kết quả: nếu puzzle biến mất → đã giải xong
-    const stillPresent = await page.$(BG_SEL).catch(() => null);
-    const solved = !stillPresent;
-    console.log(solved
-      ? "[captcha] ✅ Giải thành công!"
-      : "[captcha] ⚠️ Captcha vẫn còn — offset có thể sai hoặc cần thử lại.");
-    return { solved, slideXPixels: dist };
-
-  } catch (e) {
-    console.error("[captcha] Lỗi auto-solve:", e.message);
-    return { solved: false, reason: e.message };
   }
+
+  console.log(`[captcha] ❌ Thất bại sau ${maxRetries} lần.`);
+  return { solved: false, reason: "max_retries_exceeded", attempts: maxRetries };
 }
 
 async function saveShot() {
