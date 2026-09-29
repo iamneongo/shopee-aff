@@ -261,6 +261,32 @@ async function solveCaptcha(maxRetries = 3) {
         page.$(SLIDER_SEL).catch(() => null),
       ]);
 
+      // Fallback: nếu đang ở trang verify/captcha của Shopee, dùng kích thước ảnh để phát hiện
+      if (!bgHandle && /verify|captcha/i.test(page.url())) {
+        const { bgH, pieceH } = await page.evaluate(() => {
+          const imgs = Array.from(document.querySelectorAll("img"))
+            .filter(img => img.naturalWidth > 50 && img.naturalHeight > 30 && img.offsetParent !== null);
+          imgs.sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
+          // Dump info for debugging
+          console.log("[captcha-debug] imgs found:", imgs.map(i => `${i.naturalWidth}x${i.naturalHeight} cls=${i.className}`).join(" | "));
+          if (imgs.length >= 2) return { bgIdx: 0, pieceIdx: 1 };
+          return {};
+        }).catch(() => ({}));
+
+        const allImgs = await page.$$("img").catch(() => []);
+        const visible = [];
+        for (const img of allImgs) {
+          const box = await img.boundingBox().catch(() => null);
+          if (box && box.width > 50 && box.height > 30) visible.push({ img, area: box.width * box.height });
+        }
+        visible.sort((a, b) => b.area - a.area);
+        if (visible.length >= 1) {
+          bgHandle = visible[0].img;
+          pieceHandle = visible.length >= 2 ? visible[1].img : null;
+          console.log(`[captcha] Dùng fallback img (${visible.length} visible imgs).`);
+        }
+      }
+
       if (!bgHandle) {
         console.log(`[captcha] Không tìm thấy puzzle (url=${page.url()}) — không có captcha hoặc selector cần cập nhật.`);
         return { solved: false, reason: "captcha_not_found", attempts: attempt };
