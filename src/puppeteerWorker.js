@@ -4,6 +4,7 @@
 const path = require("path");
 const fs = require("fs");
 const https = require("https");
+const proxyManager = require("./proxyManager");
 const { addExtra } = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const puppeteerCore = require("puppeteer-core");
@@ -455,27 +456,67 @@ async function init(config) {
   return getStatus();
 }
 
+function isCaptchaError(res) {
+  return res && (res.code === "CAPTCHA" || res.code === "FETCH_ERROR");
+}
+
+async function autoRecoverAndRetry(originalLink, subIds) {
+  // Bước 1: thử giải captcha (tối đa 3 lần, mỗi lần refresh puzzle)
+  state.lastError = "90309999";
+  await saveShot();
+  const captchaResult = await solveCaptcha();
+  if (captchaResult.solved) {
+    await ensureOnApp();
+    const res = await callPage("createLink", { originalLink, subIds });
+    if (!isCaptchaError(res)) return res;
+  }
+
+  // Bước 2: captcha giải thất bại → tự đổi proxy VN rồi restart Chrome
+  console.log("[worker] Captcha không giải được — đang đổi proxy VN tự động...");
+  const proxyUrl = await proxyManager.getWorkingProxy().catch((e) => {
+    console.error("[worker] Lỗi lấy proxy:", e.message);
+    return null;
+  });
+
+  if (!proxyUrl) {
+    console.log("[worker] Không tìm được proxy VN — trả lỗi CAPTCHA.");
+    return { ok: false, code: "CAPTCHA", error: "Shopee yêu cầu xác thực CAPTCHA và không tìm được proxy VN để đổi IP.", hint: "Admin vào noVNC giải captcha thủ công." };
+  }
+
+  console.log(`[worker] Restart Chrome với proxy ${proxyUrl}...`);
+  await restartWithProxy(proxyUrl);
+
+  if (!state.loggedIn) {
+    return { ok: false, code: "NOT_LOGGED_IN", error: "Sau khi đổi proxy Chrome cần đăng nhập lại Shopee.", hint: "Admin đăng nhập lại qua noVNC rồi thử lại." };
+  }
+
+  // Bước 3: thử tạo link trên IP mới
+  await ensureOnApp();
+  const resAfterProxy = await callPage("createLink", { originalLink, subIds });
+  if (!isCaptchaError(resAfterProxy)) return resAfterProxy;
+
+  // Bước 4: IP mới vẫn bị captcha → thử giải một lần nữa
+  console.log("[worker] IP mới vẫn bị captcha — thử giải lần cuối...");
+  const solved2 = await solveCaptcha();
+  if (solved2.solved) {
+    await ensureOnApp();
+    return await callPage("createLink", { originalLink, subIds });
+  }
+
+  return { ok: false, code: "CAPTCHA", error: "Shopee vẫn yêu cầu CAPTCHA sau khi đổi proxy VN.", hint: "Thử gọi GET /api/worker/rotate-proxy hoặc admin vào noVNC giải tay." };
+}
+
 function createLink(originalLink, subIds) {
   return enqueue(async () => {
     if (!state.ready) return { ok: false, code: "WORKER_NOT_READY", error: "Worker chưa khởi động.", hint: "Thử lại sau vài giây." };
     await ensureOnApp();
     if (!state.loggedIn) { await saveShot(); return { ok: false, code: "NOT_LOGGED_IN", error: "Chưa đăng nhập Shopee.", hint: "Admin cần đăng nhập lại qua noVNC tại /vnc.html." }; }
 
-    let res = await callPage("createLink", { originalLink, subIds });
+    const res = await callPage("createLink", { originalLink, subIds });
+    if (!isCaptchaError(res)) return res;
 
-    // FETCH_ERROR: trang bị redirect sang captcha khi đang gọi API
-    // CAPTCHA (90309999): API trả captcha flag — cả 2 trường hợp thử auto-solve rồi retry 1 lần
-    if (res && (res.code === "CAPTCHA" || res.code === "FETCH_ERROR")) {
-      state.lastError = "90309999";
-      await saveShot();
-      const solved = await solveCaptcha();
-      if (solved.solved) {
-        await ensureOnApp();
-        res = await callPage("createLink", { originalLink, subIds });
-        if (res && res.code === "CAPTCHA") state.lastError = "90309999";
-      }
-    }
-    return res;
+    // Tự động phục hồi: giải captcha → đổi proxy → retry
+    return autoRecoverAndRetry(originalLink, subIds);
   });
 }
 
