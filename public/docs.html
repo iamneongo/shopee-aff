@@ -53,6 +53,7 @@
       <a href="#report">GET /api/report</a>
       <a href="#by-subid">GET /api/report/by-subid</a>
       <a href="#open-login">GET /api/worker/open-login</a>
+      <a href="#rotate-proxy">GET /api/worker/rotate-proxy</a>
       <a href="#screenshot">GET /api/worker/screenshot.png</a>
       <a href="#qr">GET /api/worker/qr.png</a>
       <a href="#notify-test">GET /api/notify/test</a>
@@ -215,6 +216,18 @@
         <pre><code>{ "ok": true, "url": "https://affiliate.shopee.vn/offer/custom_link", "loggedIn": true }</code></pre>
       </div>
 
+      <div class="ep" id="rotate-proxy">
+        <h3><span class="method get">GET</span> <code>/api/worker/rotate-proxy</code></h3>
+        <p>Tự động lấy proxy Việt Nam miễn phí (từ ProxyScrape + GeoNode API), test TCP, rồi <b>khởi động lại Chrome</b> với proxy đó. Chrome tắt ~5–10 giây sau đó mở lại.</p>
+        <p>Dùng khi IP server bị Shopee bắt captcha liên tục và auto-solve thất bại.</p>
+        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/worker/rotate-proxy"</code></pre>
+        <b>Response thành công</b>
+        <pre><code>{ "ok": true, "proxy": "http://14.225.240.23:8562", "ready": true, "loggedIn": true, "headless": false }</code></pre>
+        <b>Response lỗi</b>
+        <pre><code>{ "ok": false, "code": "NO_PROXY", "error": "Không tìm thấy proxy VN nào hoạt động từ proxy5.net." }</code></pre>
+        <div class="note">⚠️ Sau khi đổi proxy, Chrome sẽ cần đăng nhập lại Shopee nếu session bị mất. Kiểm tra <code>loggedIn</code> trong response; nếu <code>false</code> → vào noVNC đăng nhập lại. Proxy miễn phí là datacenter VN — tốt hơn IP nước ngoài nhưng Shopee vẫn có thể bắt captcha; proxy residential cho kết quả tốt hơn.</div>
+      </div>
+
       <div class="ep" id="screenshot">
         <h3><span class="method get">GET</span> <code>/api/worker/screenshot.png</code></h3>
         <p>Trả ảnh chụp màn hình Chrome hiện tại (PNG). Dùng để xem trạng thái từ xa mà không cần mở noVNC.</p>
@@ -252,21 +265,24 @@
         <tr><td>502</td><td><code>SHOPEE_FAIL_2</code></td><td>URL sai định dạng. Dùng link shopee.vn trực tiếp.</td></tr>
         <tr><td>502</td><td><code>SHOPEE_FAIL_3</code></td><td>Sản phẩm không trong chương trình affiliate hoặc sub_id lỗi.</td></tr>
         <tr><td>502</td><td><code>SHOPEE_FAIL_4</code></td><td>Vượt giới hạn Shopee. Thử lại sau vài phút.</td></tr>
+        <tr><td>503</td><td><code>NO_PROXY</code></td><td>Không tìm được proxy VN nào hoạt động (chỉ trả bởi <code>/api/worker/rotate-proxy</code>).</td></tr>
         <tr><td>500</td><td><code>INTERNAL_ERROR</code></td><td>Lỗi không xác định. Xem logs.</td></tr>
       </table>
 
       <h2 id="captcha">Captcha &amp; Auto-solve</h2>
-      <div class="success">✅ Hệ thống tích hợp <b>SadCaptcha</b> — tự động giải Shopee slider captcha mà không cần can thiệp tay trong phần lớn trường hợp.</div>
-      <p>Khi <code>ensureOnApp()</code> phát hiện Chrome bị redirect sang trang verify/captcha của Shopee, hoặc khi Shopee trả <code>error 90309999</code>:</p>
+      <div class="success">✅ Hệ thống tích hợp <b>SadCaptcha</b> — tự động giải Shopee slider captcha, retry tối đa 3 lần với puzzle mới mỗi lần.</div>
+      <p>Khi Chrome bị redirect sang trang verify/captcha hoặc Shopee trả <code>error 90309999</code>, hệ thống thực hiện vòng lặp:</p>
       <ol>
-        <li>Puppeteer chụp ảnh <b>puzzle background</b> và <b>puzzle piece</b> ngay trong trang.</li>
+        <li>Nếu đang ở trang <b>"Verification timed out"</b> → tự click <b>Go Back</b> để quay lại trang captcha.</li>
+        <li>Puppeteer chụp ảnh <b>puzzle background</b> + <b>puzzle piece</b> ngay trong trang.</li>
         <li>Gửi lên <b>SadCaptcha API</b> (<code>sadcaptcha.com/api/v1/shopeeSlider</code>) → nhận pixel offset cần kéo.</li>
-        <li>Thực hiện kéo slider với <b>chuyển động ease-in-out + nhiễu ngẫu nhiên</b> (trông tự nhiên).</li>
-        <li>Kiểm tra: nếu puzzle biến mất → giải thành công; retry tạo link.</li>
-        <li>Nếu vẫn thất bại → trả <code>503 CAPTCHA</code>, gửi thông báo Telegram + ảnh màn hình để admin vào giải tay.</li>
+        <li>Kéo slider với chuyển động ease-in-out 35 bước + nhiễu ±2px (trông tự nhiên).</li>
+        <li>Kiểm tra: puzzle biến mất → giải thành công → retry tạo link.</li>
+        <li>Nếu thất bại → click nút <b>refresh ↺</b> để lấy puzzle mới → lặp lại từ bước 2 (tối đa 3 lần).</li>
+        <li>Sau 3 lần đều thất bại → trả <code>503 CAPTCHA</code>, gửi thông báo Telegram + ảnh màn hình.</li>
       </ol>
       <p>Cấu hình: đặt <code>SADCAPTCHA_API_KEY</code> trong biến môi trường (production: Dokploy Env) hoặc <code>config.sadcaptcha.apiKey</code>.</p>
-      <div class="note">💡 IP datacenter bị Shopee bắt captcha thường xuyên hơn IP nhà. Nếu auto-solve liên tục thất bại, thêm <b>proxy residential/4G Việt Nam</b> vào <code>config.puppeteer.proxy</code>.</div>
+      <div class="note">💡 IP datacenter bị Shopee bắt captcha thường xuyên hơn IP nhà. Khi auto-solve liên tục thất bại, thử <a href="#rotate-proxy"><code>GET /api/worker/rotate-proxy</code></a> để đổi sang IP Việt Nam khác, hoặc cấu hình proxy residential/4G VN vào <code>config.puppeteer.proxy</code>.</div>
 
       <h2 id="notify">Thông báo (Telegram / Webhook)</h2>
       <p>Server tự bắn thông báo kèm ảnh màn hình khi cần admin can thiệp (captcha auto-solve thất bại, mất đăng nhập).</p>
