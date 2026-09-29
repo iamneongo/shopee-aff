@@ -205,41 +205,46 @@ async function getImagesFromPageDOM() {
   }).catch(() => ({ bg: null, piece: null, bgWidth: 0 }));
 }
 
-// Tìm slider button theo thứ tự ưu tiên
+// Tìm slider button — trả về { el?, box: {x,y,width,height} }
 async function findSliderButton() {
+  // Thử page.$$(selector) để lấy TẤT CẢ matches và kiểm tra từng cái
   const SLIDER_SELS = [
-    // SadCaptcha library chính thức (modal)
     'aside[aria-modal=true] div[style*="width: 40px"][style*="height: 40px"]',
-    // Standalone verify/captcha page — dạng transform translateX
     'div[style*="transform: translateX(0px)"]',
-    // Generic
     '[class*="slider-btn"]', '[class*="slide-btn"]', '[class*="drag-btn"]',
     '[class*="verify-move"]', '[class*="move-block"]',
-    // Fallback: bất kỳ div 30-60px có cursor pointer
   ];
   for (const sel of SLIDER_SELS) {
-    const el = await page.$(sel).catch(() => null);
-    if (!el) continue;
-    const box = await el.boundingBox().catch(() => null);
-    if (box && box.width >= 20 && box.height >= 20) {
-      console.log(`[captcha] Slider button tìm thấy: "${sel}" box=${JSON.stringify(box)}`);
-      return { el, box };
+    const els = await page.$$(sel).catch(() => []);
+    for (const el of els) {
+      const box = await el.boundingBox().catch(() => null);
+      if (box && box.width >= 20 && box.height >= 20) {
+        console.log(`[captcha] Slider: "${sel}" box=${JSON.stringify(box)}`);
+        return { el, box };
+      }
     }
   }
-  // Fallback cuối: tìm qua evaluate
+  // Fallback: dùng evaluate để lấy coordinates rồi trả về box trực tiếp (không cần element handle)
   const result = await page.evaluate(() => {
     const candidates = Array.from(document.querySelectorAll("div, button"))
       .filter(el => {
         const s = el.getAttribute("style") || "";
         const r = el.getBoundingClientRect();
-        return (s.includes("transform") || s.includes("cursor")) && r.width >= 20 && r.width <= 80 && r.height >= 20 && r.height <= 80 && r.x > 0;
+        return s.includes("transform") && r.width >= 20 && r.width <= 80 && r.height >= 20 && r.height <= 80 && r.x > 0;
+      })
+      .sort((a, b) => {
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        return (rb.width * rb.height) - (ra.width * ra.height);
       });
     if (!candidates.length) return null;
     const el = candidates[0];
     const r = el.getBoundingClientRect();
-    return { cls: el.className.toString().slice(0, 80), style: (el.getAttribute("style") || "").slice(0, 80), x: r.x, y: r.y, w: r.width, h: r.height };
+    return { x: r.x, y: r.y, w: r.width, h: r.height, style: (el.getAttribute("style") || "").slice(0, 80) };
   }).catch(() => null);
-  if (result) console.log("[captcha] Slider fallback từ evaluate:", JSON.stringify(result));
+  if (result) {
+    console.log("[captcha] Slider via evaluate coords:", JSON.stringify(result));
+    return { el: null, box: { x: result.x, y: result.y, width: result.w, height: result.h } };
+  }
   return null;
 }
 
@@ -346,23 +351,24 @@ async function solveCaptcha(maxRetries = 3) {
       let bgWidth = imgs.bgWidth;
 
       if (!bgB64) {
-        console.log("[captcha] Không có data URL — thử screenshot element...");
-        // Tìm img lớn nhất trên trang
-        const allImgs = await page.$$("img").catch(() => []);
-        let bestEl = null, bestArea = 0;
-        for (const img of allImgs) {
-          const box = await img.boundingBox().catch(() => null);
-          if (box && box.width * box.height > bestArea) { bestArea = box.width * box.height; bestEl = img; bgWidth = box.width; }
-        }
-        // Thử canvas
+        console.log("[captcha] Không có data URL — screenshot canvas elements...");
+        // Shopee captcha dùng canvas: bg (EkGpDI ~280x150) + piece (_0N0-Dn ~59x58)
         const allCanvas = await page.$$("canvas").catch(() => []);
+        const canvasItems = [];
         for (const c of allCanvas) {
           const box = await c.boundingBox().catch(() => null);
-          if (box && box.width * box.height > bestArea) { bestArea = box.width * box.height; bestEl = c; bgWidth = box.width; }
+          if (box && box.width > 20 && box.height > 20) canvasItems.push({ el: c, box });
         }
-        if (bestEl) {
-          bgB64 = await bestEl.screenshot({ encoding: "base64" }).catch(() => null);
-          console.log(`[captcha] Fallback screenshot: area=${bestArea}, bgWidth=${bgWidth}`);
+        // Sắp xếp theo diện tích: lớn nhất = bg, nhỏ hơn = piece
+        canvasItems.sort((a, b) => (b.box.width * b.box.height) - (a.box.width * a.box.height));
+        if (canvasItems.length > 0) {
+          bgB64 = await canvasItems[0].el.screenshot({ encoding: "base64" }).catch(() => null);
+          bgWidth = canvasItems[0].box.width;
+          console.log(`[captcha] Canvas bg: ${canvasItems[0].box.width}x${canvasItems[0].box.height}, b64=${bgB64 ? bgB64.length + "c" : "null"}`);
+        }
+        if (canvasItems.length > 1 && !pieceB64) {
+          pieceB64 = await canvasItems[1].el.screenshot({ encoding: "base64" }).catch(() => null);
+          console.log(`[captcha] Canvas piece: ${canvasItems[1].box.width}x${canvasItems[1].box.height}, b64=${pieceB64 ? pieceB64.length + "c" : "null"}`);
         }
       }
 
