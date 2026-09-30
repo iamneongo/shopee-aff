@@ -1,20 +1,12 @@
 {
     "port": 3000,
     "apiKey": "",
+    "affiliateId": "17384700594",
     "notify": {
         "enabled": true,
         "cooldownSec": 300,
         "telegram": { "botToken": "", "chatId": "" },
         "webhook": ""
-    },
-    "puppeteer": {
-        "connectURL": "",
-        "executablePath": "",
-        "userDataDir": "./.chrome-profile",
-        "headless": false,
-        "startUrl": "https://affiliate.shopee.vn/offer/custom_link",
-        "windowSize": "1280,900",
-        "proxy": ""
     },
     "defaultSubIds": {
         "subId1": "guest",
@@ -23,41 +15,16 @@
         "subId4": "",
         "subId5": ""
     },
-    "link": {
-        "url": "https://affiliate.shopee.vn/api/v3/gql?q=batchCustomLink",
-        "headers": {
-            "accept": "application/json, text/plain, */*",
-            "accept-language": "en",
-            "af-ac-enc-dat": "<YOUR_AF_AC_ENC_DAT>",
-            "af-ac-enc-sz-token": "<YOUR_AF_AC_ENC_SZ_TOKEN>",
-            "affiliate-program-type": "1",
-            "content-type": "application/json; charset=UTF-8",
-            "csrf-token": "<YOUR_CSRF_TOKEN>",
-            "origin": "https://affiliate.shopee.vn",
-            "referer": "https://affiliate.shopee.vn/offer/custom_link",
-            "user-agent": "<YOUR_USER_AGENT>",
-            "x-sap-ri": "<YOUR_X_SAP_RI>",
-            "x-sap-sec": "<YOUR_X_SAP_SEC>",
-            "x-sz-sdk-version": "1.12.21",
-            "Cookie": "<YOUR_FULL_COOKIE_STRING>"
-        }
-    },
     "report": {
         "url": "https://affiliate.shopee.vn/api/v3/report/list",
         "headers": {
             "accept": "application/json, text/plain, */*",
             "accept-language": "en",
-            "af-ac-enc-dat": "<YOUR_AF_AC_ENC_DAT>",
-            "af-ac-enc-sz-token": "<YOUR_AF_AC_ENC_SZ_TOKEN>",
             "affiliate-program-type": "1",
             "content-type": "application/json; charset=UTF-8",
-            "csrf-token": "<YOUR_CSRF_TOKEN>",
             "origin": "https://affiliate.shopee.vn",
             "referer": "https://affiliate.shopee.vn/report/conversion_report",
             "user-agent": "<YOUR_USER_AGENT>",
-            "x-sap-ri": "<YOUR_X_SAP_RI>",
-            "x-sap-sec": "<YOUR_X_SAP_SEC>",
-            "x-sz-sdk-version": "1.12.21",
             "Cookie": "<YOUR_FULL_COOKIE_STRING>"
         }
     }

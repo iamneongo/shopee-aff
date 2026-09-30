@@ -1,11 +1,10 @@
 const path = require("path");
 const express = require("express");
 const { loadConfig } = require("./config");
-const worker = require("./puppeteerWorker");
 const linkBuilder = require("./linkBuilder");
+const shopee = require("./shopee");
 const notifier = require("./notifier");
-const { ShopeeError } = require("./shopee");
-const proxyManager = require("./proxyManager");
+const { ShopeeError } = shopee;
 
 const app = express();
 app.use(express.json());
@@ -40,97 +39,26 @@ app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "shopee-aff-api",
-    mode: "puppeteer",
+    mode: "stateless", // tạo link bằng s.shopee.vn/an_redir — không cần trình duyệt
     endpoints: [
-      "POST /api/link            { originalLink, subIds? }",
+      "POST /api/link            { originalLink, userId?, subIds?, affiliateId? }",
       "GET  /api/report          ?days=7&page=1&size=50",
       "GET  /api/report/by-subid ?subIds=web,test&days=7",
-      "GET  /api/worker/status",
-      "GET  /api/worker/open-login   (mở/điều hướng trang đăng nhập)",
-      "GET  /api/worker/rotate-proxy (lấy proxy VN miễn phí + restart Chrome)",
-      "GET  /api/worker/screenshot.png",
+      "GET  /api/notify/test",
     ],
   });
 });
 
-// ===== Trạng thái worker =====
-// Giữ path /api/bridge/status để tương thích trang test (banner trạng thái)
-function statusPayload() {
-  const s = worker.getStatus();
-  return { ok: true, mode: "puppeteer", online: s.ready && s.loggedIn, ...s };
-}
+// Trạng thái (giữ path cũ cho tương thích trang test) — API không còn trạng thái browser.
+const statusPayload = () => ({ ok: true, mode: "stateless", online: true });
 app.get("/api/bridge/status", (req, res) => res.json(statusPayload()));
 app.get("/api/worker/status", (req, res) => res.json(statusPayload()));
-
-// Điều hướng Chrome tới trang đăng nhập (dùng khi cần login lại)
-app.get(
-  "/api/worker/open-login",
-  wrap(async (req, res) => {
-    const r = await worker.navigate(req.query.url || "https://affiliate.shopee.vn/offer/custom_link");
-    res.json(r);
-  }),
-);
-
-// Tự động lấy proxy VN miễn phí từ proxy5.net rồi khởi động lại Chrome với proxy đó.
-// Dùng khi IP bị Shopee bắt captcha liên tục. Chrome sẽ tắt ~5-10 giây rồi mở lại.
-app.get(
-  "/api/worker/rotate-proxy",
-  wrap(async (req, res) => {
-    const proxyUrl = await proxyManager.getWorkingProxy();
-    if (!proxyUrl) {
-      return res.status(503).json({ ok: false, code: "NO_PROXY", error: "Không tìm thấy proxy VN nào hoạt động từ proxy5.net." });
-    }
-    const status = await worker.restartWithProxy(proxyUrl);
-    res.json({ ok: true, proxy: proxyUrl, ...status });
-  }),
-);
-
-// Gỡ proxy: khởi động lại Chrome KHÔNG proxy (dùng khi proxy free hỏng, mất kết nối).
-app.get(
-  "/api/worker/clear-proxy",
-  wrap(async (req, res) => {
-    const status = await worker.restartWithProxy(null);
-    res.json({ ok: true, proxy: null, ...status });
-  }),
-);
-
-// Đặt proxy tuỳ chỉnh (có thể kèm user:pass) rồi restart Chrome.
-// POST body: { proxy: "host:port" | "host:port:user:pass" | "http://user:pass@host:port" }
-// Dùng POST để mật khẩu không lộ trên URL/log. Lưu ý: chỉ áp dụng runtime — để bền
-// qua redeploy cần thêm proxy vào File Mount config.json (puppeteer.proxy) trên Dokploy.
-app.post(
-  "/api/worker/set-proxy",
-  wrap(async (req, res) => {
-    const proxy = (req.body && req.body.proxy) || "";
-    if (!proxy) throw new ShopeeError("Thiếu proxy.", { status: 400, code: "MISSING_PROXY" });
-    const status = await worker.restartWithProxy(proxy);
-    res.json({ ok: true, ...status }); // không echo proxy (chứa credentials)
-  }),
-);
-
-// Ảnh chụp màn hình Chrome hiện tại (để xem/đăng nhập từ xa)
-app.get("/api/worker/screenshot.png", (req, res) => {
-  worker.snapshot().then(() => {
-    res.sendFile(worker.SHOT, (err) => {
-      if (err) res.status(404).json({ ok: false, error: "Chưa có ảnh." });
-    });
-  });
-});
-
-// Hiện mã QR đăng nhập rồi trả ảnh (quét bằng app Shopee)
-app.get("/api/worker/qr.png", (req, res) => {
-  worker.showQr().then(() => {
-    res.sendFile(worker.SHOT, (err) => {
-      if (err) res.status(404).json({ ok: false, error: "Chưa lấy được QR." });
-    });
-  });
-});
 
 // Gửi thử thông báo (kiểm tra cấu hình Telegram/webhook)
 app.get(
   "/api/notify/test",
   wrap(async (req, res) => {
-    const r = await notifier.notifyNow("test", "✅ Test thông báo Shopee Aff API — cấu hình notify OK.", worker.SHOT);
+    const r = await notifier.notifyNow("test", "✅ Test thông báo Shopee Aff API — cấu hình notify OK.");
     res.json({ ok: r.ok, detail: r });
   }),
 );
@@ -149,15 +77,10 @@ function validateSubId(value, field) {
 
 // HTTP status phù hợp cho từng mã lỗi
 const ERROR_STATUS = {
-  WORKER_NOT_READY: 503,
-  NOT_LOGGED_IN:    503,
-  CAPTCHA:          503,
-  FETCH_ERROR:      503,
-  PAGE_NAVIGATED:   503,
-  MISSING_LINK:     400,
-  INVALID_SUBID:    400,
-  NO_AFFILIATE_ID:  500,
-  SHOPEE_FAIL_2:    502,
+  MISSING_LINK:    400,
+  INVALID_SUBID:   400,
+  NO_AFFILIATE_ID: 500,
+  SHOPEE_FAIL_2:   502,
 };
 
 // ===== Tạo affiliate link (cashback) =====
@@ -172,7 +95,6 @@ app.post(
     const { originalLink, userId, subIds, affiliateId } = req.body || {};
     if (!originalLink) throw new ShopeeError("Thiếu originalLink.", { status: 400, code: "MISSING_LINK" });
 
-    // Validate trước khi tạo link
     if (userId != null) validateSubId(String(userId).trim(), "userId");
     if (subIds && typeof subIds === "object") {
       for (const [k, v] of Object.entries(subIds)) {
@@ -192,8 +114,7 @@ app.post(
     const result = await linkBuilder.createAffiliateLink(affId, originalLink, finalSubIds);
     if (!result || !result.ok) {
       const code = (result && result.code) || "SHOPEE_ERROR";
-      const status = ERROR_STATUS[code] || 502;
-      return res.status(status).json({
+      return res.status(ERROR_STATUS[code] || 502).json({
         ok: false,
         code,
         error: (result && result.error) || "Không tạo được link.",
@@ -210,19 +131,15 @@ app.post(
   }),
 );
 
-// ===== Báo cáo chuyển đổi =====
+// ===== Báo cáo chuyển đổi (đọc bằng cookie — xem config.report) =====
 app.get(
   "/api/report",
   wrap(async (req, res) => {
-    const r = await worker.getReport({
+    const r = await shopee.getReport({
       days: req.query.days ? Number(req.query.days) : undefined,
       pageNum: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.size ? Number(req.query.size) : undefined,
     });
-    if (!r || r.ok === false) {
-      const code = (r && r.code) || "SHOPEE_ERROR";
-      return res.status(ERROR_STATUS[code] || 502).json({ ok: false, code, error: (r && r.error) || "Lỗi lấy báo cáo.", ...(r && r.hint ? { hint: r.hint } : {}) });
-    }
     res.json({ ok: true, total: r.total, list: r.list });
   }),
 );
@@ -233,30 +150,10 @@ app.get(
   wrap(async (req, res) => {
     const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
     const days = req.query.days ? Number(req.query.days) : 7;
-    const r = await worker.getReport({ days, pageSize: 100 });
-    if (!r || r.ok === false) {
-      const code = (r && r.code) || "SHOPEE_ERROR";
-      return res.status(ERROR_STATUS[code] || 502).json({ ok: false, code, error: (r && r.error) || "Lỗi lấy báo cáo.", ...(r && r.hint ? { hint: r.hint } : {}) });
-    }
-    const matched = (r.list || []).filter((item) => {
-      const subs = item.sub_ids || item.subIds || [];
-      return subIds.some((id) => subs.includes(id));
-    });
-    res.json({ ok: true, total: r.total, matchedCount: matched.length, subIds, matched });
+    const r = await shopee.getReportBySubId({ subIds, days, pageSize: 100 });
+    res.json({ ok: true, total: r.total, matchedCount: r.matched.length, subIds, matched: r.matched });
   }),
 );
-
-// Debug DOM captcha (tạm thời)
-app.get("/api/captcha/debug", wrap(async (req, res) => {
-  const r = await worker.captchaDebug();
-  res.json(r);
-}));
-
-// Test trực tiếp trình giải captcha. ?url= để navigate tới trang verify trước.
-app.get("/api/captcha/solve", wrap(async (req, res) => {
-  const r = await worker.solveCaptchaNow(req.query.url);
-  res.json(r);
-}));
 
 // 404
 app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm thấy endpoint." }));
@@ -264,28 +161,10 @@ app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm th�
 // Chỉ khởi động khi chạy trực tiếp (node src/server.js)
 if (require.main === module) {
   const port = process.env.PORT || loadConfig().port || 3000;
-  (async () => {
-    console.log("🧭 Mode: puppeteer — đang mở Chrome...");
-    try {
-      const st = await worker.init(loadConfig());
-      console.log(`   Chrome sẵn sàng | headless: ${st.headless} | đăng nhập Shopee: ${st.loggedIn ? "OK" : "CHƯA (gọi /api/worker/open-login để login)"}`);
-    } catch (e) {
-      console.error("   Puppeteer init lỗi:", e.message);
-    }
-    app.listen(port, () => {
-      console.log(`🚀 Shopee Aff API đang chạy tại http://localhost:${port}`);
-    });
-
-    // Health-loop: tự phát hiện mất đăng nhập -> báo động (mỗi 60s)
-    let wasLoggedIn = worker.getStatus().loggedIn;
-    setInterval(() => {
-      const s = worker.getStatus();
-      if (wasLoggedIn && !s.loggedIn) {
-        notifier.notify("login", "⚠️ Chrome bot vừa MẤT ĐĂNG NHẬP Shopee. Vào đăng nhập lại để tiếp tục tạo link.", worker.SHOT);
-      }
-      wasLoggedIn = s.loggedIn;
-    }, 60000).unref?.();
-  })();
+  app.listen(port, () => {
+    console.log(`🚀 Shopee Aff API (stateless) đang chạy tại http://localhost:${port}`);
+    console.log("   Tạo link qua s.shopee.vn/an_redir — không cần Chrome/captcha/proxy.");
+  });
 }
 
 module.exports = { app };
