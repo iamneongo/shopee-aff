@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { loadConfig } = require("./config");
+const cookieStore = require("./cookieStore");
 
 // Lỗi đặc thù của Shopee khi token/cookie hết hạn
 const TOKEN_EXPIRED_CODE = 90309999;
@@ -143,11 +144,11 @@ async function getReport(opts = {}) {
   const config = loadConfig();
   const reportCfg = config.report || {};
 
-  // Cookie report: ưu tiên config.reportCookie (đơn giản), fallback config.report.headers.Cookie
-  const cookie = config.reportCookie || (reportCfg.headers && reportCfg.headers.Cookie) || "";
+  // Cookie report: ưu tiên cookie store (cập nhật qua /cookie.html), rồi config.
+  const cookie = cookieStore.getCookie() || config.reportCookie || (reportCfg.headers && reportCfg.headers.Cookie) || "";
   if (!cookie) {
     throw new ShopeeError(
-      "Chưa cấu hình cookie để đọc report. Thêm \"reportCookie\": \"<chuỗi Cookie affiliate.shopee.vn>\" vào config.json.",
+      "Chưa cấu hình cookie để đọc report. Mở /cookie.html để dán cookie affiliate.shopee.vn.",
       { status: 503, code: "NO_REPORT_COOKIE" },
     );
   }

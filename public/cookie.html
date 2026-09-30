@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cập nhật Cookie Report — Shopee Aff</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px; color: #1f2328; }
+    h1 { font-size: 20px; }
+    p.desc { color: #57606a; font-size: 14px; line-height: 1.5; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; font-size: 14px; }
+    input, textarea { width: 100%; padding: 10px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 14px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    textarea { min-height: 130px; resize: vertical; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    button { padding: 10px 18px; border: 0; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .primary { background: #ee4d2d; color: #fff; }
+    .ghost { background: #eaeef2; color: #24292f; }
+    #status { margin-top: 16px; padding: 12px; border-radius: 8px; font-size: 14px; white-space: pre-wrap; word-break: break-word; display: none; }
+    .ok { background: #dafbe1; color: #116329; }
+    .err { background: #ffebe9; color: #a40e26; }
+    .muted { color: #8b949e; font-size: 12px; margin-top: 6px; }
+    details { margin-top: 20px; font-size: 13px; color: #57606a; }
+    code { background: #eaeef2; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>🍪 Cập nhật Cookie Report — Shopee Affiliate</h1>
+  <p class="desc">
+    Dùng khi báo cáo <code>/api/report</code> báo cookie hết hạn (thường ~1–2 tuần/lần).
+    Lấy cookie: đăng nhập <b>affiliate.shopee.vn</b> → mở trang Báo cáo chuyển đổi →
+    F12 → tab <b>Network</b> → chọn request <code>report/list</code> → Request Headers →
+    copy nguyên chuỗi header <b>Cookie</b> → dán vào ô dưới → Lưu.
+  </p>
+
+  <label for="apikey">API Key (x-api-key)</label>
+  <input id="apikey" type="password" placeholder="Dán API key của bạn" autocomplete="off" />
+  <div class="muted" id="cookieState">Đang kiểm tra trạng thái cookie…</div>
+
+  <label for="cookie">Cookie (chuỗi header Cookie đầy đủ)</label>
+  <textarea id="cookie" placeholder="SPC_F=...; SPC_ST=...; csrftoken=...; ..."></textarea>
+
+  <div class="row">
+    <button class="primary" onclick="saveCookie()">Lưu cookie</button>
+    <button class="ghost" onclick="testReport()">Test /api/report</button>
+    <button class="ghost" onclick="refreshState()">Kiểm tra trạng thái</button>
+  </div>
+
+  <div id="status"></div>
+
+  <details>
+    <summary>Lưu ý</summary>
+    <ul>
+      <li>Cookie được lưu trên server (volume bền), không nằm trong repo.</li>
+      <li>API key được nhớ trong trình duyệt này (localStorage) cho tiện, không gửi đi đâu ngoài API của bạn.</li>
+      <li>Khi cookie hết hạn, hệ thống tự gửi cảnh báo (Telegram/webhook nếu đã cấu hình).</li>
+    </ul>
+  </details>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const KEY_LS = "shopee_aff_apikey";
+    $("apikey").value = localStorage.getItem(KEY_LS) || "";
+    $("apikey").addEventListener("change", () => localStorage.setItem(KEY_LS, $("apikey").value.trim()));
+
+    function show(msg, ok) {
+      const el = $("status");
+      el.style.display = "block";
+      el.className = ok ? "ok" : "err";
+      el.textContent = msg;
+    }
+    function headers() {
+      const k = $("apikey").value.trim();
+      localStorage.setItem(KEY_LS, k);
+      return { "content-type": "application/json", "x-api-key": k };
+    }
+
+    async function refreshState() {
+      try {
+        const r = await fetch("/api/report/cookie", { headers: headers() });
+        const j = await r.json();
+        if (!r.ok) { $("cookieState").textContent = "Không đọc được trạng thái: " + (j.error || r.status); return; }
+        $("cookieState").textContent = j.configured
+          ? `✅ Đã có cookie (${j.length} ký tự, cập nhật ${new Date(j.updatedAt).toLocaleString()})`
+          : "⚠️ Chưa có cookie — hãy dán và lưu.";
+      } catch (e) { $("cookieState").textContent = "Lỗi mạng: " + e.message; }
+    }
+
+    async function saveCookie() {
+      const cookie = $("cookie").value.trim();
+      if (!cookie) return show("Chưa dán cookie.", false);
+      try {
+        const r = await fetch("/api/report/cookie", { method: "POST", headers: headers(), body: JSON.stringify({ cookie }) });
+        const j = await r.json();
+        if (!r.ok || !j.ok) return show("Lưu thất bại: " + (j.error || r.status), false);
+        show(`Đã lưu cookie (${j.length} ký tự) lúc ${new Date(j.updatedAt).toLocaleString()}. Bấm "Test /api/report" để kiểm tra.`, true);
+        $("cookie").value = "";
+        refreshState();
+      } catch (e) { show("Lỗi mạng: " + e.message, false); }
+    }
+
+    async function testReport() {
+      show("Đang gọi /api/report?days=7&size=5 …", true);
+      try {
+        const r = await fetch("/api/report?days=7&size=5", { headers: headers() });
+        const j = await r.json();
+        if (!r.ok || !j.ok) return show("Report lỗi (" + r.status + "): " + (j.error || "") + (j.code ? " [" + j.code + "]" : ""), false);
+        show(`✅ Report OK — ${j.total} bản ghi (7 ngày, lấy 5).\n` + JSON.stringify((j.list || []).slice(0, 2), null, 2), true);
+      } catch (e) { show("Lỗi mạng: " + e.message, false); }
+    }
+
+    refreshState();
+  </script>
+</body>
+</html>

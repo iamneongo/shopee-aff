@@ -3,6 +3,7 @@ const express = require("express");
 const { loadConfig } = require("./config");
 const linkBuilder = require("./linkBuilder");
 const shopee = require("./shopee");
+const cookieStore = require("./cookieStore");
 const notifier = require("./notifier");
 const { ShopeeError } = shopee;
 
@@ -42,8 +43,9 @@ app.get("/health", (req, res) => {
     mode: "stateless", // tạo link bằng s.shopee.vn/an_redir — không cần trình duyệt
     endpoints: [
       "POST /api/link            { originalLink, userId?, subIds?, affiliateId? }",
-      "GET  /api/report          ?days=7&page=1&size=50",
+      "GET  /api/report          ?days=7&page=1&size=50   (cần cookie)",
       "GET  /api/report/by-subid ?subIds=web,test&days=7",
+      "POST /api/report/cookie   { cookie }   (UI: /cookie.html)",
       "GET  /api/notify/test",
     ],
   });
@@ -131,16 +133,44 @@ app.post(
   }),
 );
 
-// ===== Báo cáo chuyển đổi (đọc bằng cookie — xem config.report) =====
+// Cảnh báo khi cookie report hết hạn/thiếu (chống spam bằng cooldown trong notifier)
+function alertCookieIfExpired(err) {
+  if (err && (err.code === shopee.TOKEN_EXPIRED_CODE || err.code === "NO_REPORT_COOKIE")) {
+    notifier.notify(
+      "report-cookie",
+      "⚠️ Cookie đọc báo cáo Shopee đã HẾT HẠN/thiếu. Vào /cookie.html để dán cookie mới.\n" +
+        "Trang: https://shopee-api.apps.neooi.com/cookie.html",
+    );
+  }
+}
+
+// ===== Cập nhật cookie report (dùng bởi trang /cookie.html) =====
+app.get("/api/report/cookie", (req, res) => {
+  const j = cookieStore.get();
+  res.json({ ok: true, configured: !!j, length: j ? j.cookie.length : 0, updatedAt: j ? j.updatedAt : null });
+});
+app.post(
+  "/api/report/cookie",
+  wrap(async (req, res) => {
+    const cookie = ((req.body && req.body.cookie) || "").trim();
+    if (!cookie) throw new ShopeeError("Thiếu cookie.", { status: 400, code: "MISSING_COOKIE" });
+    const saved = cookieStore.set(cookie);
+    res.json({ ok: true, length: saved.cookie.length, updatedAt: saved.updatedAt });
+  }),
+);
+
+// ===== Báo cáo chuyển đổi (đọc bằng cookie) =====
 app.get(
   "/api/report",
   wrap(async (req, res) => {
-    const r = await shopee.getReport({
-      days: req.query.days ? Number(req.query.days) : undefined,
-      pageNum: req.query.page ? Number(req.query.page) : undefined,
-      pageSize: req.query.size ? Number(req.query.size) : undefined,
-    });
-    res.json({ ok: true, total: r.total, list: r.list });
+    try {
+      const r = await shopee.getReport({
+        days: req.query.days ? Number(req.query.days) : undefined,
+        pageNum: req.query.page ? Number(req.query.page) : undefined,
+        pageSize: req.query.size ? Number(req.query.size) : undefined,
+      });
+      res.json({ ok: true, total: r.total, list: r.list });
+    } catch (err) { alertCookieIfExpired(err); throw err; }
   }),
 );
 
@@ -148,10 +178,12 @@ app.get(
 app.get(
   "/api/report/by-subid",
   wrap(async (req, res) => {
-    const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
-    const days = req.query.days ? Number(req.query.days) : 7;
-    const r = await shopee.getReportBySubId({ subIds, days, pageSize: 100 });
-    res.json({ ok: true, total: r.total, matchedCount: r.matched.length, subIds, matched: r.matched });
+    try {
+      const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const days = req.query.days ? Number(req.query.days) : 7;
+      const r = await shopee.getReportBySubId({ subIds, days, pageSize: 100 });
+      res.json({ ok: true, total: r.total, matchedCount: r.matched.length, subIds, matched: r.matched });
+    } catch (err) { alertCookieIfExpired(err); throw err; }
   }),
 );
 
