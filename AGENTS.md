@@ -6,32 +6,31 @@
 ## 1. Dự án là gì
 API cho **hệ thống cashback Shopee affiliate**: tạo affiliate link **gắn theo từng user** (để quy hoa hồng) và lấy **báo cáo chuyển đổi**. Node.js + Express + Puppeteer.
 
-## 2. Ràng buộc CỐT LÕI (đừng phá vỡ)
-Shopee kiểm **dấu vân tay TLS của Chrome** (post-quantum X25519MLKEM768) ở endpoint tạo link (`batchCustomLink`). Hệ quả đã kiểm chứng bằng thực nghiệm:
-- ❌ **KHÔNG** thể tạo link bằng Node/curl thuần (kể cả giả TLS `node-tls-client`, HTTP/2, cookie tươi đầy đủ) → luôn `403 / error 90309999`.
-- ❌ `x-sap-sec`/`af-ac-enc-*` KHÔNG cần (test: bỏ/để rác vẫn chạy trong browser). ServiceWorker chỉ là Workbox cache.
-- ✅ **CHỈ** tạo được khi `fetch` chạy TRONG một Chrome THẬT đã đăng nhập (Puppeteer lái). TLS khớp → qua.
-- `/api/report*` thì gọi trực tiếp bằng cookie được (không bị kiểm TLS chặt) — nhưng bản hiện tại route report qua Puppeteer luôn cho đồng nhất.
+## 2. Kiến trúc CỐT LÕI hiện tại (v2 — stateless, 2026-09-30)
+**Tạo link KHÔNG còn dùng Puppeteer/Chrome.** Dùng endpoint chuyển hướng chính thức của Shopee `s.shopee.vn/an_redir` — chỉ ghép chuỗi:
+```
+https://s.shopee.vn/an_redir?origin_link=<url SP chuẩn>&affiliate_id=<id tĩnh>&sub_id=<subId1-...-subId5>
+```
+Khi user click, Shopee tự gắn tracking (`utm_source=an_<id>`, `utm_content=<sub_id>`, `utm_medium=affiliates`) và redirect tới sản phẩm. Đây là cơ chế các network (AccessTrade/Affise) vẫn dùng — hoa hồng quy về đúng `affiliate_id` + `sub_id`. **Không cần trình duyệt/cookie/captcha/proxy/đăng nhập.** Code: `src/linkBuilder.js`.
+- `origin_link` PHẢI là URL sản phẩm chuẩn (`...-i.<shop>.<item>` hoặc `/product/<shop>/<item>`); link rút gọn (`s.shopee.vn/xxx`) bị mất tracking → `linkBuilder.resolveToCanonical()` tự follow redirect để chuẩn hoá trước.
+- `affiliate_id` là ID TĨNH, công khai (nằm trong mọi link affiliate — lấy bằng cách resolve 1 link của mình rồi đọc `utm_source=an_<id>`). Cấu hình qua `SHOPEE_AFFILIATE_ID` (env) hoặc `config.affiliateId`, hoặc override trong body `/api/link`.
+- **Report** (`/api/report`): gọi trực tiếp `affiliate.shopee.vn/api/v3/report/list` bằng **cookie** (`src/shopee.js`, `config.report.headers.Cookie`) — report KHÔNG bị kiểm TLS chặt. Cần cookie tươi khi hết hạn.
 
-→ **Đừng lại đi làm "native API thuần". Đã chứng minh bất khả thi.** Giữ Puppeteer.
+### Lịch sử (vì sao bỏ Puppeteer)
+Endpoint web nội bộ `batchCustomLink` kiểm **vân tay TLS Chrome** (post-quantum X25519MLKEM768) → không replay được bằng Node/curl (luôn `403/90309999`), từng phải lái Chrome thật + giải captcha (SadCaptcha) + proxy dân cư. IP datacenter bị soft-block liên tục ("Please Try Again Later"). Open API chính thức thì Shopee **không duyệt**. → Chuyển sang `an_redir` (2026-09-30): đơn giản, bền, hết captcha. Toàn bộ stack Puppeteer/Chrome/Xvfb/noVNC/SadCaptcha/proxy **đã gỡ bỏ** (xem git history nếu cần khôi phục).
 
 ## 3. Kiến trúc
 ```
-client → POST /api/link → Express (src/server.js) → puppeteerWorker → Chrome thật (đã login) → shortLink
+client → POST /api/link  → Express (src/server.js) → linkBuilder → chuỗi an_redir (không gọi mạng nếu link đã chuẩn)
+client → GET  /api/report → Express → shopee.js → affiliate.shopee.vn/report/list (cookie)
 ```
-- **src/server.js** — Express API. Route: `/api/link`, `/api/report`, `/api/report/by-subid`, `/api/worker/{status,open-login,screenshot.png,qr.png}`, `/api/notify/test`, `/health`. `/api/bridge/status` giữ lại cho tương thích trang test.
-- **src/puppeteerWorker.js** — lái Chrome. 2 chế độ (config.puppeteer):
-  - `connectURL` có giá trị → **connect** vào Chrome người dùng tự mở (`--remote-debugging-port`). Dùng khi máy local bị lỗi cửa sổ Puppeteer trắng (Windows).
-  - `connectURL` rỗng → **launch** Chrome (headless true/false). Dùng cho server/VPS + Xvfb.
-- **src/notifier.js** — Telegram/webhook báo khi captcha/mất login (chống spam theo `cooldownSec`).
-- **src/shopee.js** — `ShopeeError` + helper csrf (report). `csrf-token` = giá trị cookie `csrftoken` (tự suy ra).
+- **src/server.js** — Express API stateless. Route: `/api/link`, `/api/report`, `/api/report/by-subid`, `/api/notify/test`, `/health`. `/api/bridge/status` + `/api/worker/status` giữ lại làm stub (`{online:true}`) cho tương thích trang test.
+- **src/linkBuilder.js** — tạo link `an_redir` (ghép chuỗi) + `resolveToCanonical` (chuẩn hoá link rút gọn). KHÔNG cần trình duyệt.
+- **src/shopee.js** — `ShopeeError` + `getReport`/`getReportBySubId` (axios + cookie từ `config.report`). `csrf-token` tự suy từ cookie `csrftoken`.
+- **src/notifier.js** — Telegram/webhook (chống spam theo `cooldownSec`).
 - **src/config.js** — đọc `config.json` (đọc lại mỗi request; sửa config KHÔNG cần restart).
-- **public/index.html** (trang test), **public/docs.html** (tài liệu API cho người dùng).
-- **Dockerfile + entrypoint.sh** — 1 container: Xvfb + x11vnc + noVNC + Chrome + Node.
-
-### Luồng thao tác Chrome (tuần tự)
-Mọi lệnh tạo link/report đều đi qua `enqueue()` — chạy tuần tự, không song song.
-Trước khi gọi Shopee, `ensureOnApp()` tự điều hướng về `affiliate.shopee.vn` nếu Chrome đang ở trang khác, và **tự giải captcha** nếu bị redirect sang verify (xem mục 7).
+- **public/index.html** (trang test), **public/docs.html** (tài liệu API).
+- **Dockerfile** — image Node thuần (node:22-slim). Không còn Chrome/Xvfb/noVNC.
 
 ## 4. SubIds cho cashback
 `POST /api/link` body: `{ originalLink, userId?, subIds? }`.
@@ -66,35 +65,14 @@ Cần Chrome cài sẵn. `npm install` rồi `cp config.example.json config.json
 
 ## 7. Vận hành & bảo trì
 
-### Kiểm tra
-`GET /api/worker/status` → `{ ready, loggedIn, headless }`. `loggedIn:false` = cần đăng nhập lại.
-`GET /api/worker/screenshot.png` → ảnh màn hình Chrome hiện tại (nhanh hơn mở noVNC).
+### Tạo link (`/api/link`)
+Stateless, không cần đăng nhập/captcha. Chỉ cần `affiliate_id` đúng của bạn. **Lấy affiliate_id:** resolve 1 link affiliate bất kỳ của mình (`curl -L`) rồi đọc `utm_source=an_<id>` ở URL đích. Cấu hình: env `SHOPEE_AFFILIATE_ID` hoặc `config.affiliateId` (hoặc override `affiliateId` trong body). Hầu như không cần bảo trì.
 
-### Captcha — tự giải (SadCaptcha)
-Khi `ensureOnApp()` phát hiện Chrome bị redirect sang trang verify, hoặc Shopee trả `error 90309999`, `solveCaptcha()` trong `puppeteerWorker.js` chạy. **Port trung thực từ extension chính thức `shopee-captcha-solver` v3.0.2** (KHÔNG dùng extension — dùng `page.mouse` của Puppeteer = input qua CDP `isTrusted=true`). Nhận diện & xử lý 2 loại:
+### Report (`/api/report`) — cần cookie
+Đọc report bằng cookie đặt ở `config.report.headers.Cookie`. Cookie hết hạn (~vài ngày–2 tuần) → lấy cookie mới từ trình duyệt đã đăng nhập affiliate.shopee.vn (DevTools → Network → copy header Cookie) → cập nhật File Mount `config.json` → Redeploy (hoặc sửa nóng nếu mount cho đọc lại). Lỗi `90309999` = cookie hết hạn.
 
-- **PUZZLE** (`aside[aria-modal=true]`): puzzle slide đơn giản. Ảnh là `<img>` (data URL). Giữ chuột kéo 10px → lấy ảnh bg+piece → `POST /api/v1/puzzle {puzzleImageB64, pieceImageB64}` → `{slideXProportion}` → `distance = puzzleWidth × slideXProportion` → kéo tới → thả.
-- **IMAGE_CRAWL** (`#NEW_CAPTCHA`): piece "bò" theo quỹ đạo cong. Ảnh là `<canvas>` (`toDataURL()`), nút kéo là `div:has(> svg + svg)`. Flow 3 bước:
-  1. `POST /api/v1/shopee-image-crawl-pre-analyze {image_b64}` → `{slideXProportion, skipRecommended}` (nếu `skipRecommended` → reset ↺ lấy captcha khác).
-  2. Giữ chuột, quét slider 0→85% bước 3px, mỗi bước ghi `{pixels_from_slider_origin, piece_rotation_angle, piece_center:{proportionX,proportionY}}` (piece_center = tâm piece / bbox puzzle). Dừng sớm khi piece vượt `slideXProportion` +15px overshoot, hoặc piece đứng yên.
-  3. `POST /api/v1/shopee-image-crawl {puzzle_image_b64, piece_image_b64, slide_piece_trajectory}` → `{pixelsFromSliderOrigin}` → thả tại `buttonCenter.x + pixelsFromSliderOrigin`.
-
-Giải xong: kiểm tra captcha biến mất (`captchaGone()`) → retry `createLink`. Thất bại sau `maxRetries` (mặc định 3, reset giữa các lần) → trả `503 CAPTCHA` + thông báo Telegram.
-
-Selector/endpoint chuẩn tham chiếu từ source: `github.com/gbiz123/shopee-captcha-solver-chrome-extension` (`script.ts`) và `github.com/gbiz123/shopee-captcha-solver` (`selectors.py`, `api.py`, `models.py`). Cấu hình key: `SADCAPTCHA_API_KEY` env var (ưu tiên) hoặc `config.sadcaptcha.apiKey`.
-
-⚠️ Shopee đổi loại captcha tùy device/IP. Nếu `solveCaptcha` báo `no_captcha` nhưng screenshot thấy captcha → selector đổi, đối chiếu lại 2 repo trên. Debug realtime: `GET /api/captcha/debug`.
-
-### Đăng nhập / captcha thủ công
-Mở noVNC (`https://shopee-vnc.apps.neooi.com/vnc.html`) → nhập VNC password → trong Chrome:
-- Nếu chưa đăng nhập: đăng nhập Shopee. Profile lưu ở volume `/data` → bền qua redeploy.
-- Nếu auto-solve thất bại: vào `affiliate.shopee.vn/offer/custom_link`, tạo 1 link qua giao diện, giải captcha thủ công → nhận cookie `AC_CERT_D`.
-
-### Session hết hạn
-Session Shopee hết hạn ~vài ngày–2 tuần → đăng nhập lại qua noVNC.
-
-### IP datacenter
-Server bị Shopee bắt captcha thường xuyên hơn IP nhà. Nếu bị làm khó liên tục → thêm **proxy residential/4G VN** vào `config.puppeteer.proxy` (sửa File Mount → Redeploy).
+### Kiểm tra nhanh
+`GET /health` → `{ mode:"stateless", ... }`. `GET /api/worker/status` → stub `{online:true}` (giữ cho trang test cũ).
 
 ## 8. Dùng API
 ```bash
