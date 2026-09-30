@@ -84,6 +84,15 @@ app.get(
   }),
 );
 
+// Gỡ proxy: khởi động lại Chrome KHÔNG proxy (dùng khi proxy free hỏng, mất kết nối).
+app.get(
+  "/api/worker/clear-proxy",
+  wrap(async (req, res) => {
+    const status = await worker.restartWithProxy(null);
+    res.json({ ok: true, proxy: null, ...status });
+  }),
+);
+
 // Ảnh chụp màn hình Chrome hiện tại (để xem/đăng nhập từ xa)
 app.get("/api/worker/screenshot.png", (req, res) => {
   worker.snapshot().then(() => {
