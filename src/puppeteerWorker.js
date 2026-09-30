@@ -844,6 +844,20 @@ async function restartWithProxy(proxyUrl) {
   return getStatus();
 }
 
+// Gọi trực tiếp trình giải captcha để test (tùy chọn navigate tới URL verify trước).
+function solveCaptchaNow(url) {
+  return enqueue(async () => {
+    if (!page) return { ok: false, error: "no page" };
+    if (url) {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+      await sleep(2000);
+    }
+    const result = await solveCaptcha();
+    await saveShot();
+    return { ok: true, url: page.url(), result };
+  });
+}
+
 async function captchaDebug() {
   // Không dùng enqueue để có thể chạy song song với solve đang chạy
   if (!page) return { ok: false, error: "no page" };
@@ -912,4 +926,4 @@ async function captchaDebug() {
   })();
 }
 
-module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, restartWithProxy, captchaDebug, SHOT };
+module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, restartWithProxy, captchaDebug, solveCaptchaNow, SHOT };

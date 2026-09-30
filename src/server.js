@@ -230,6 +230,12 @@ app.get("/api/captcha/debug", wrap(async (req, res) => {
   res.json(r);
 }));
 
+// Test trực tiếp trình giải captcha. ?url= để navigate tới trang verify trước.
+app.get("/api/captcha/solve", wrap(async (req, res) => {
+  const r = await worker.solveCaptchaNow(req.query.url);
+  res.json(r);
+}));
+
 // 404
 app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm thấy endpoint." }));
 
