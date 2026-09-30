@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const proxyManager = require("./proxyManager");
+const proxyChain = require("proxy-chain");
 const { addExtra } = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const puppeteerCore = require("puppeteer-core");
@@ -72,6 +73,27 @@ function parseProxy(raw) {
   } catch {
     return { server: raw, auth: null };
   }
+}
+
+// Chuẩn bị giá trị cho --proxy-server. Với proxy CÓ auth, Chrome không nhận
+// user:pass và page.authenticate() hay lỗi (hiện hộp thoại 407) → dùng proxy-chain
+// tạo một proxy nội bộ 127.0.0.1 KHÔNG auth, forward lên proxy thật kèm credentials.
+let anonProxyUrl = null;
+async function closeAnonProxy() {
+  if (anonProxyUrl) {
+    try { await proxyChain.closeAnonymizedProxy(anonProxyUrl, true); } catch {}
+    anonProxyUrl = null;
+  }
+}
+async function resolveProxyServer(proxyInfo) {
+  await closeAnonProxy();
+  if (!proxyInfo.server) return null;
+  if (!proxyInfo.auth) return proxyInfo.server; // không auth → dùng thẳng
+  const hostport = proxyInfo.server.replace(/^https?:\/\//, "");
+  const upstream = `http://${encodeURIComponent(proxyInfo.auth.username)}:${encodeURIComponent(proxyInfo.auth.password)}@${hostport}`;
+  anonProxyUrl = await proxyChain.anonymizeProxy(upstream);
+  console.log(`[init] Proxy nội bộ (proxy-chain): ${anonProxyUrl} → ${hostport}`);
+  return anonProxyUrl;
 }
 
 // ===== Hàm chạy TRONG trang (self-contained) =====
@@ -721,8 +743,6 @@ async function init(config) {
   fullCfg = config || {};
   cfg = (config && config.puppeteer) || {};
   const proxyInfo = parseProxy(cfg.proxy);
-  state.proxyAuth = proxyInfo.auth;
-  state.proxyServer = proxyInfo.server || null;
   if (proxyInfo.server) console.log(`[init] Proxy: ${proxyInfo.server}${proxyInfo.auth ? " (có auth)" : ""}`);
 
   if (cfg.connectURL) {
@@ -732,7 +752,6 @@ async function init(config) {
     state.headless = false;
     const pages = await browser.pages();
     page = pages.find((p) => /affiliate\.shopee\.vn/.test(p.url())) || pages[0] || (await browser.newPage());
-    if (proxyInfo.auth) await page.authenticate(proxyInfo.auth).catch(() => {});
     if (!/affiliate\.shopee\.vn/.test(page.url())) {
       await page.goto(cfg.startUrl || START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
     }
@@ -751,6 +770,8 @@ async function init(config) {
     }
 
     state.headless = cfg.headless !== false; // mặc định headless
+    const proxyServer = await resolveProxyServer(proxyInfo); // local anon nếu có auth
+    state.proxyServer = proxyServer;
     browser = await puppeteer.launch({
       headless: state.headless ? "new" : false,
       executablePath,
@@ -763,12 +784,11 @@ async function init(config) {
         "--disable-gpu", "--disable-software-rasterizer",
         "--window-size=" + (cfg.windowSize || "1280,900"),
         "--window-position=" + (cfg.windowPosition || "60,40"),
-        proxyInfo.server ? "--proxy-server=" + proxyInfo.server : "",
+        proxyServer ? "--proxy-server=" + proxyServer : "",
       ].filter(Boolean),
     });
     const pages = await browser.pages();
     page = pages[0] || (await browser.newPage());
-    if (proxyInfo.auth) await page.authenticate(proxyInfo.auth).catch(() => {});
     if (cfg.userAgent) await page.setUserAgent(cfg.userAgent);
     await page.bringToFront().catch(() => {});
     await page.goto(cfg.startUrl || START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
@@ -890,6 +910,7 @@ function getStatus() {
 
 async function shutdown() {
   try { if (browser) { if (state.connected) await browser.disconnect(); else await browser.close(); } } catch {}
+  await closeAnonProxy();
   browser = null; page = null; state.ready = false;
 }
 
