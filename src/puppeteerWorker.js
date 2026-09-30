@@ -562,12 +562,28 @@ async function solveCaptcha(maxRetries = 3) {
       await handleVerifyTimeout();
       await clickTryAgain(); // thoát trạng thái "Please Try Again Later" nếu có
 
-      // đợi captcha render (tối đa ~10s)
-      await page.waitForFunction(() => {
+      // đợi PUZZLE THẬT render (canvas/img), không chỉ vỏ #NEW_CAPTCHA (tối đa ~12s)
+      const hasRealPuzzle = await page.waitForFunction(() => {
         const q = (s) => { try { return !!document.querySelector(s); } catch { return false; } };
-        return q("#NEW_CAPTCHA") || q("#captchaMask") || q("aside[aria-modal=true]");
-      }, { timeout: 10000 }).catch(() => {});
-      await sleep(1200);
+        return q("#NEW_CAPTCHA canvas") || q("#puzzleImgComponent") || q(".DfwepB")
+          || q("aside[aria-modal=true] img[draggable]");
+      }, { timeout: 12000 }).then(() => true).catch(() => false);
+
+      // Không có puzzle thật → kiểm tra soft-block ("Please Try Again Later")
+      if (!hasRealPuzzle) {
+        const soft = await page.evaluate(() => {
+          const t = document.body ? document.body.innerText : "";
+          return /try again|can't be completed|thử lại|later/i.test(t);
+        }).catch(() => false);
+        if (attempt === 1) await saveShot();
+        if (soft) {
+          console.log("[captcha] ⛔ Soft-block của Shopee (IP bị gắn cờ) — không có captcha thật để giải.");
+          log.push({ attempt, type: "soft_block", reason: "soft_blocked" });
+          return { solved: false, reason: "soft_blocked", attempts: attempt, log,
+            hint: "Shopee soft-block IP này (thường do IP datacenter). Đăng nhập lại qua noVNC và/hoặc thêm proxy VN residential/4G." };
+        }
+      }
+      await sleep(1000);
 
       const type = await detectCaptchaType();
       console.log(`[captcha] Loại captcha: ${type || "không rõ"}`);
