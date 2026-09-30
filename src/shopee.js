@@ -219,7 +219,11 @@ async function getReportBySubId(opts = {}) {
   });
 
   const matched = list.filter((item) => {
-    const subs = item.sub_ids || item.subIds || [];
+    // API trả sub_id ở utm_content (chuỗi nối bằng '-'), có bản trả mảng sub_ids
+    let subs = item.sub_ids || item.subIds;
+    if (!Array.isArray(subs)) {
+      subs = typeof item.utm_content === "string" ? item.utm_content.split("-") : [];
+    }
     return subIds.some((id) => subs.includes(id));
   });
 
