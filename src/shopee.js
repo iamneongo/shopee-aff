@@ -137,9 +137,30 @@ async function createLink(originalLink, subIds) {
  * @param {number} [opts.purchaseTimeEnd] - unix giây
  * @returns {Promise<{total:number, list:Array, raw:object}>}
  */
+const REPORT_URL_DEFAULT = "https://affiliate.shopee.vn/api/v3/report/list";
+
 async function getReport(opts = {}) {
   const config = loadConfig();
   const reportCfg = config.report || {};
+
+  // Cookie report: ưu tiên config.reportCookie (đơn giản), fallback config.report.headers.Cookie
+  const cookie = config.reportCookie || (reportCfg.headers && reportCfg.headers.Cookie) || "";
+  if (!cookie) {
+    throw new ShopeeError(
+      "Chưa cấu hình cookie để đọc report. Thêm \"reportCookie\": \"<chuỗi Cookie affiliate.shopee.vn>\" vào config.json.",
+      { status: 503, code: "NO_REPORT_COOKIE" },
+    );
+  }
+  const url = reportCfg.url || REPORT_URL_DEFAULT;
+  const headers = withDerivedCsrf({
+    accept: "application/json, text/plain, */*",
+    "affiliate-program-type": "1",
+    "content-type": "application/json; charset=UTF-8",
+    origin: "https://affiliate.shopee.vn",
+    referer: "https://affiliate.shopee.vn/report/conversion_report",
+    ...(reportCfg.headers || {}),
+    Cookie: cookie,
+  });
 
   const now = Math.floor(Date.now() / 1000);
   const days = opts.days ?? 7;
@@ -148,7 +169,7 @@ async function getReport(opts = {}) {
   const purchaseTimeEnd = opts.purchaseTimeEnd ?? now;
 
   try {
-    const res = await axios.get(reportCfg.url, {
+    const res = await axios.get(url, {
       params: {
         page_num: opts.pageNum ?? 1,
         page_size: opts.pageSize ?? 50,
@@ -156,7 +177,7 @@ async function getReport(opts = {}) {
         purchase_time_e: purchaseTimeEnd,
         version: 1,
       },
-      headers: withDerivedCsrf(reportCfg.headers),
+      headers,
       maxBodyLength: Infinity,
     });
 
