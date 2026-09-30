@@ -93,6 +93,20 @@ app.get(
   }),
 );
 
+// Đặt proxy tuỳ chỉnh (có thể kèm user:pass) rồi restart Chrome.
+// POST body: { proxy: "host:port" | "host:port:user:pass" | "http://user:pass@host:port" }
+// Dùng POST để mật khẩu không lộ trên URL/log. Lưu ý: chỉ áp dụng runtime — để bền
+// qua redeploy cần thêm proxy vào File Mount config.json (puppeteer.proxy) trên Dokploy.
+app.post(
+  "/api/worker/set-proxy",
+  wrap(async (req, res) => {
+    const proxy = (req.body && req.body.proxy) || "";
+    if (!proxy) throw new ShopeeError("Thiếu proxy.", { status: 400, code: "MISSING_PROXY" });
+    const status = await worker.restartWithProxy(proxy);
+    res.json({ ok: true, ...status }); // không echo proxy (chứa credentials)
+  }),
+);
+
 // Ảnh chụp màn hình Chrome hiện tại (để xem/đăng nhập từ xa)
 app.get("/api/worker/screenshot.png", (req, res) => {
   worker.snapshot().then(() => {

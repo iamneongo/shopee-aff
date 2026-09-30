@@ -47,6 +47,33 @@ function findChrome(explicit) {
   return undefined;
 }
 
+// Chuẩn hoá cấu hình proxy → { server, auth }. Chrome KHÔNG nhận user:pass trong
+// --proxy-server (HTTP) → phải tách credentials ra để dùng page.authenticate().
+// Hỗ trợ: "http://h:p", "http://u:p@h:p", "h:p", "h:p:u:pass"
+function parseProxy(raw) {
+  if (!raw || typeof raw !== "string") return { server: "", auth: null };
+  raw = raw.trim();
+  if (!raw) return { server: "", auth: null };
+  if (!raw.includes("://")) {
+    const parts = raw.split(":");
+    if (parts.length >= 4) {
+      const host = parts[0], port = parts[1], user = parts[2];
+      const pass = parts.slice(3).join(":"); // mật khẩu có thể chứa ':'
+      return { server: `http://${host}:${port}`, auth: { username: user, password: pass } };
+    }
+    return { server: `http://${raw}`, auth: null };
+  }
+  try {
+    const u = new URL(raw);
+    const auth = u.username
+      ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) }
+      : null;
+    return { server: `${u.protocol}//${u.host}`, auth };
+  } catch {
+    return { server: raw, auth: null };
+  }
+}
+
 // ===== Hàm chạy TRONG trang (self-contained) =====
 function pageDo(action, params) {
   params = params || {};
@@ -693,6 +720,10 @@ async function callPage(action, params) {
 async function init(config) {
   fullCfg = config || {};
   cfg = (config && config.puppeteer) || {};
+  const proxyInfo = parseProxy(cfg.proxy);
+  state.proxyAuth = proxyInfo.auth;
+  state.proxyServer = proxyInfo.server || null;
+  if (proxyInfo.server) console.log(`[init] Proxy: ${proxyInfo.server}${proxyInfo.auth ? " (có auth)" : ""}`);
 
   if (cfg.connectURL) {
     // GẮN vào Chrome bạn tự mở (cổng debug) — cửa sổ do bạn mở nên hiển thị bình thường
@@ -701,6 +732,7 @@ async function init(config) {
     state.headless = false;
     const pages = await browser.pages();
     page = pages.find((p) => /affiliate\.shopee\.vn/.test(p.url())) || pages[0] || (await browser.newPage());
+    if (proxyInfo.auth) await page.authenticate(proxyInfo.auth).catch(() => {});
     if (!/affiliate\.shopee\.vn/.test(page.url())) {
       await page.goto(cfg.startUrl || START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
     }
@@ -731,11 +763,12 @@ async function init(config) {
         "--disable-gpu", "--disable-software-rasterizer",
         "--window-size=" + (cfg.windowSize || "1280,900"),
         "--window-position=" + (cfg.windowPosition || "60,40"),
-        cfg.proxy ? "--proxy-server=" + cfg.proxy : "",
+        proxyInfo.server ? "--proxy-server=" + proxyInfo.server : "",
       ].filter(Boolean),
     });
     const pages = await browser.pages();
     page = pages[0] || (await browser.newPage());
+    if (proxyInfo.auth) await page.authenticate(proxyInfo.auth).catch(() => {});
     if (cfg.userAgent) await page.setUserAgent(cfg.userAgent);
     await page.bringToFront().catch(() => {});
     await page.goto(cfg.startUrl || START_URL, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
