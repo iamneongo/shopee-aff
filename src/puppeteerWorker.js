@@ -336,17 +336,18 @@ async function solveCaptcha(maxRetries = 3) {
       const startX = sliderBox.x + sliderBox.width / 2;
       const startY = sliderBox.y + sliderBox.height / 2;
 
-      // Bước 1: Kéo 10px để piece xuất hiện (per library)
+      // Bước 1: Kéo 10px rồi RELEASE (per SadCaptcha Python library: _drag_slider + mouseup)
       await page.mouse.move(startX, startY);
-      await sleep(80 + Math.random() * 60);
+      await sleep(120 + Math.random() * 80);
       await page.mouse.down();
-      await sleep(100);
+      await sleep(80 + Math.random() * 40);
       for (let i = 1; i <= 10; i++) {
-        await page.mouse.move(startX + i, startY + Math.log(1 + i) * 0.3);
-        await sleep(40 + Math.random() * 20);
+        await page.mouse.move(startX + i, startY + Math.sin(i / 10 * Math.PI) * 1.5);
+        await sleep(35 + Math.random() * 25);
       }
-      console.log("[captcha] Đã kéo 10px — đợi piece render...");
-      await sleep(600); // đợi canvas cập nhật (per SadCaptcha library: time.sleep(0.5))
+      await page.mouse.up(); // RELEASE sau 10px
+      console.log("[captcha] Đã kéo 10px và release — đợi piece render...");
+      await sleep(600); // per library: time.sleep(0.5)
 
       // Bước 2: Lấy ảnh từ DOM (src attribute = data URL)
       const imgs = await getImagesFromPageDOM();
@@ -418,23 +419,42 @@ async function solveCaptcha(maxRetries = 3) {
       }
 
       // Bước 4: Tính pixel dist và kéo đến đích
-      // bgWidth = chiều rộng ảnh background (slide bar dài bằng ảnh)
-      const slideBarWidth = bgWidth || 270; // fallback 270px nếu không có
-      const dist = Math.round(sadResult.slideXProportion * slideBarWidth);
-      console.log(`[captcha] slideXProportion=${sadResult.slideXProportion}, barWidth=${slideBarWidth}, dist=${dist}px`);
+      // Per Python library: _drag_slider(slider, total_dist) từ vị trí hiện tại (10px)
+      // → final position = 10 + total_dist
+      const slideBarWidth = bgWidth || 270;
+      const extraDist = Math.round(sadResult.slideXProportion * slideBarWidth);
+      const finalX = startX + 10 + extraDist; // kéo từ 10px, thêm extraDist nữa
+      console.log(`[captcha] slideXProportion=${sadResult.slideXProportion}, barWidth=${slideBarWidth}, extraDist=${extraDist}px, finalX=${Math.round(finalX)}`);
 
-      for (let i = 10; i <= dist; i += 2) {
-        await page.mouse.move(startX + i, startY + Math.log(1 + i) * 0.2);
-        await sleep(15 + Math.random() * 8);
+      // Re-grab slider tại vị trí hiện tại (startX+10) rồi kéo natural
+      const grabX = startX + 10;
+      await page.mouse.move(grabX, startY);
+      await sleep(80 + Math.random() * 60);
+      await page.mouse.down();
+      await sleep(60 + Math.random() * 40);
+
+      // Drag with easing (slow start, fast middle, slow end) + slight Y curve
+      const totalSteps = Math.max(20, extraDist);
+      for (let step = 0; step <= totalSteps; step++) {
+        const t = step / totalSteps;
+        // Ease in-out sine
+        const eased = (1 - Math.cos(t * Math.PI)) / 2;
+        const curX = grabX + extraDist * eased;
+        // Natural Y wobble
+        const curY = startY + Math.sin(t * Math.PI) * 2 * (Math.random() > 0.5 ? 1 : -1);
+        await page.mouse.move(curX, curY);
+        // Speed: slower at edges, faster in middle
+        const delay = 8 + Math.round(10 * (1 - Math.sin(t * Math.PI))) + Math.random() * 5;
+        await sleep(delay);
       }
-      // Overshoot nhẹ rồi về
-      await page.mouse.move(startX + dist + 3, startY);
-      await sleep(60);
-      await page.mouse.move(startX + dist, startY);
-      await sleep(150 + Math.random() * 80);
+      // Slight overshoot then settle
+      await page.mouse.move(finalX + 3, startY + 0.5);
+      await sleep(80 + Math.random() * 40);
+      await page.mouse.move(finalX, startY);
+      await sleep(200 + Math.random() * 100);
       await page.mouse.up();
 
-      await sleep(2500);
+      await sleep(3500);
       await saveShot();
 
       // Kiểm tra kết quả
