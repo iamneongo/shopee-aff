@@ -224,6 +224,12 @@ app.get(
   }),
 );
 
+// Debug DOM captcha (tạm thời)
+app.get("/api/captcha/debug", wrap(async (req, res) => {
+  const r = await worker.captchaDebug();
+  res.json(r);
+}));
+
 // 404
 app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm thấy endpoint." }));
 

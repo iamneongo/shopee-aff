@@ -730,4 +730,28 @@ async function restartWithProxy(proxyUrl) {
   return getStatus();
 }
 
-module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, restartWithProxy, SHOT };
+async function captchaDebug() {
+  return enqueue(async () => {
+    if (!page) return { ok: false, error: "no page" };
+    const dom = await inspectCaptchaDOM();
+    const widths = await page.evaluate(() => {
+      const slider = document.querySelector('div[style*="transform: translateX"]');
+      const trackW = slider && slider.parentElement ? slider.parentElement.getBoundingClientRect().width : 0;
+      const canvases = Array.from(document.querySelectorAll("canvas")).map(c => {
+        const r = c.getBoundingClientRect();
+        return { cssW: Math.round(r.width), cssH: Math.round(r.height), intrinsicW: c.width, intrinsicH: c.height };
+      });
+      const imgs = Array.from(document.querySelectorAll("img")).filter(i => {
+        const r = i.getBoundingClientRect(); return r.width > 30;
+      }).map(i => {
+        const r = i.getBoundingClientRect();
+        return { cssW: Math.round(r.width), draggable: i.draggable, isData: i.src.startsWith("data:"), src20: i.src.slice(0, 20) };
+      });
+      const aside = document.querySelector("aside[aria-modal=true]");
+      return { trackW: Math.round(trackW), canvases, imgs, hasAside: !!aside };
+    }).catch(e => ({ error: e.message }));
+    return { ok: true, url: page.url(), dom, widths };
+  });
+}
+
+module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, restartWithProxy, captchaDebug, SHOT };
