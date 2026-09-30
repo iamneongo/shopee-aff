@@ -368,13 +368,13 @@ async function solveCaptcha(maxRetries = 3) {
           const out = { bg: null, piece: null, bgW: 0, bgH: 0, pieceW: 0, pieceH: 0 };
           if (els.length > 0) {
             try { out.bg = els[0].toDataURL("image/png").split(",")[1]; } catch (e) {}
-            out.bgW = els[0].width;
-            out.bgH = els[0].height;
+            out.bgW = els[0].getBoundingClientRect().width; // CSS rendered width, not intrinsic
+            out.bgH = els[0].getBoundingClientRect().height;
           }
           if (els.length > 1) {
             try { out.piece = els[1].toDataURL("image/png").split(",")[1]; } catch (e) {}
-            out.pieceW = els[1].width;
-            out.pieceH = els[1].height;
+            out.pieceW = els[1].getBoundingClientRect().width;
+            out.pieceH = els[1].getBoundingClientRect().height;
           }
           return out;
         }).catch(() => null);
@@ -428,9 +428,9 @@ async function solveCaptcha(maxRetries = 3) {
       }
 
       // Bước 5: Tính dist rồi kéo tiếp (chuột vẫn held tại startX+10)
-      // totalDist = khoảng kéo TỔNG từ startX (vị trí 0)
-      // slideXProportion × trackWidth = vị trí hole trong ảnh → vị trí slider cần đến
-      const slideBarWidth = trackWidth || bgWidth || 280;
+      // Dùng CSS-rendered width của ảnh background (không phải slider track)
+      // vì slideXProportion là tỉ lệ trên ảnh, không phải trên track (có thể có padding)
+      const slideBarWidth = bgWidth || trackWidth || 280;
       const totalDist = Math.round(sadResult.slideXProportion * slideBarWidth);
       const remainDist = Math.max(0, totalDist - 10); // cần kéo thêm từ 10px hiện tại
       const finalX = startX + totalDist;
