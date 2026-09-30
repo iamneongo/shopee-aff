@@ -2,6 +2,7 @@ const path = require("path");
 const express = require("express");
 const { loadConfig } = require("./config");
 const worker = require("./puppeteerWorker");
+const linkBuilder = require("./linkBuilder");
 const notifier = require("./notifier");
 const { ShopeeError } = require("./shopee");
 const proxyManager = require("./proxyManager");
@@ -146,7 +147,7 @@ function validateSubId(value, field) {
   }
 }
 
-// HTTP status phù hợp cho từng mã lỗi worker
+// HTTP status phù hợp cho từng mã lỗi
 const ERROR_STATUS = {
   WORKER_NOT_READY: 503,
   NOT_LOGGED_IN:    503,
@@ -155,19 +156,23 @@ const ERROR_STATUS = {
   PAGE_NAVIGATED:   503,
   MISSING_LINK:     400,
   INVALID_SUBID:    400,
+  NO_AFFILIATE_ID:  500,
+  SHOPEE_FAIL_2:    502,
 };
 
 // ===== Tạo affiliate link (cashback) =====
-// POST /api/link  body: { originalLink, userId?, subIds? }
+// POST /api/link  body: { originalLink, userId?, subIds?, affiliateId? }
 // - userId: mã người dùng nhận cashback -> gắn vào subId1, chỉ [a-zA-Z0-9].
 // - subIds: ghi đè/bổ sung subId1..subId5 (ưu tiên hơn defaultSubIds; userId thắng subId1).
+// Dùng endpoint chuyển hướng chính thức Shopee (s.shopee.vn/an_redir) — chỉ ghép chuỗi,
+// KHÔNG cần Chrome/cookie/captcha/proxy. affiliate_id lấy từ config/env (hoặc body override).
 app.post(
   "/api/link",
   wrap(async (req, res) => {
-    const { originalLink, userId, subIds } = req.body || {};
+    const { originalLink, userId, subIds, affiliateId } = req.body || {};
     if (!originalLink) throw new ShopeeError("Thiếu originalLink.", { status: 400, code: "MISSING_LINK" });
 
-    // Validate trước khi gọi Shopee
+    // Validate trước khi tạo link
     if (userId != null) validateSubId(String(userId).trim(), "userId");
     if (subIds && typeof subIds === "object") {
       for (const [k, v] of Object.entries(subIds)) {
@@ -177,22 +182,16 @@ app.post(
 
     let cfg = {};
     try { cfg = loadConfig(); } catch {}
+    const affId = affiliateId || process.env.SHOPEE_AFFILIATE_ID || cfg.affiliateId;
     const finalSubIds = { ...(cfg.defaultSubIds || {}), ...(subIds || {}) };
     if (userId != null && String(userId).trim() !== "") {
       finalSubIds.subId1 = String(userId).trim();
     }
-    // bỏ subId rỗng để Shopee không nhận giá trị trống
     Object.keys(finalSubIds).forEach((k) => { if (!finalSubIds[k]) delete finalSubIds[k]; });
 
-    const result = await worker.createLink(originalLink, finalSubIds);
+    const result = await linkBuilder.createAffiliateLink(affId, originalLink, finalSubIds);
     if (!result || !result.ok) {
       const code = (result && result.code) || "SHOPEE_ERROR";
-      // Báo động để admin vào giải captcha / đăng nhập lại
-      if (code === "CAPTCHA") {
-        notifier.notify("captcha", "⚠️ Shopee bắt CAPTCHA. Vào noVNC tạo 1 link qua giao diện để giải, rồi thử lại.", worker.SHOT);
-      } else if (code === "NOT_LOGGED_IN") {
-        notifier.notify("login", "⚠️ Shopee CHƯA ĐĂNG NHẬP. Mở noVNC và đăng nhập lại.", worker.SHOT);
-      }
       const status = ERROR_STATUS[code] || 502;
       return res.status(status).json({
         ok: false,
