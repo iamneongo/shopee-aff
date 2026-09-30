@@ -68,8 +68,12 @@ Cần Chrome cài sẵn. `npm install` rồi `cp config.example.json config.json
 ### Tạo link (`/api/link`)
 Stateless, không cần đăng nhập/captcha. Chỉ cần `affiliate_id` đúng của bạn. **Lấy affiliate_id:** resolve 1 link affiliate bất kỳ của mình (`curl -L`) rồi đọc `utm_source=an_<id>` ở URL đích. Cấu hình: env `SHOPEE_AFFILIATE_ID` hoặc `config.affiliateId` (hoặc override `affiliateId` trong body). Hầu như không cần bảo trì.
 
-### Report (`/api/report`) — cần cookie
-Đọc report bằng cookie đặt ở `config.report.headers.Cookie`. Cookie hết hạn (~vài ngày–2 tuần) → lấy cookie mới từ trình duyệt đã đăng nhập affiliate.shopee.vn (DevTools → Network → copy header Cookie) → cập nhật File Mount `config.json` → Redeploy (hoặc sửa nóng nếu mount cho đọc lại). Lỗi `90309999` = cookie hết hạn.
+### Report (`/api/report`) — cần cookie, cập nhật qua UI
+Đọc report bằng cookie affiliate.shopee.vn (report KHÔNG bị kiểm TLS/captcha). Cookie sống ~1–2 tuần.
+- **Cập nhật cookie nhanh:** mở **`/cookie.html`** (vd `https://shopee-api.apps.neooi.com/cookie.html`) → nhập API key + dán chuỗi header `Cookie` (DevTools → Network → request `report/list` → Request Headers → Cookie) → Lưu → Test. KHÔNG cần sửa config Dokploy / redeploy.
+- **Lưu trữ:** `src/cookieStore.js` ghi cookie vào `/data/report-cookie.json` (volume `shopee-data`, bền qua redeploy). Ưu tiên: cookie store > `config.reportCookie` > `config.report.headers.Cookie`.
+- **Cảnh báo hết hạn:** khi report lỗi `90309999`/thiếu cookie → tự gửi Telegram/webhook (nếu đã cấu hình `config.notify`) nhắc vào `/cookie.html`.
+- Endpoint: `GET/POST /api/report/cookie` (cần `x-api-key`). Lỗi khi chưa cấu hình: `503 NO_REPORT_COOKIE`.
 
 ### Kiểm tra nhanh
 `GET /health` → `{ mode:"stateless", ... }`. `GET /api/worker/status` → stub `{online:true}` (giữ cho trang test cũ).
