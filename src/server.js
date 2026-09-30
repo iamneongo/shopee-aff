@@ -2,7 +2,6 @@ const path = require("path");
 const express = require("express");
 const { loadConfig } = require("./config");
 const worker = require("./puppeteerWorker");
-const addlivetagService = require("./addlivetagService");
 const notifier = require("./notifier");
 const { ShopeeError } = require("./shopee");
 const proxyManager = require("./proxyManager");
@@ -35,27 +34,20 @@ const wrap = (fn) => (req, res) =>
     res.status(status).json({ ok: false, code: err.code || "INTERNAL_ERROR", error: err.message });
   });
 
-function getMode() {
-  try { return loadConfig().mode || "puppeteer"; } catch { return "puppeteer"; }
-}
-
 // ===== Health check =====
 app.get("/health", (req, res) => {
-  const mode = getMode();
   res.json({
     ok: true,
     service: "shopee-aff-api",
-    mode,
+    mode: "puppeteer",
     endpoints: [
       "POST /api/link            { originalLink, subIds? }",
       "GET  /api/report          ?days=7&page=1&size=50",
       "GET  /api/report/by-subid ?subIds=web,test&days=7",
       "GET  /api/worker/status",
-      ...(mode === "puppeteer" ? [
-        "GET  /api/worker/open-login   (mở/điều hướng trang đăng nhập)",
-        "GET  /api/worker/rotate-proxy (lấy proxy VN miễn phí + restart Chrome)",
-        "GET  /api/worker/screenshot.png",
-      ] : []),
+      "GET  /api/worker/open-login   (mở/điều hướng trang đăng nhập)",
+      "GET  /api/worker/rotate-proxy (lấy proxy VN miễn phí + restart Chrome)",
+      "GET  /api/worker/screenshot.png",
     ],
   });
 });
@@ -63,14 +55,6 @@ app.get("/health", (req, res) => {
 // ===== Trạng thái worker =====
 // Giữ path /api/bridge/status để tương thích trang test (banner trạng thái)
 function statusPayload() {
-  const mode = getMode();
-  if (mode === "addlivetag") {
-    let cfg = {};
-    try { cfg = loadConfig(); } catch {}
-    const alt = cfg.addlivetag || {};
-    const online = !!(alt.apiKey && alt.affid);
-    return { ok: true, mode: "addlivetag", online, ready: online, loggedIn: online };
-  }
   const s = worker.getStatus();
   return { ok: true, mode: "puppeteer", online: s.ready && s.loggedIn, ...s };
 }
@@ -177,20 +161,15 @@ app.post(
     // bỏ subId rỗng để Shopee không nhận giá trị trống
     Object.keys(finalSubIds).forEach((k) => { if (!finalSubIds[k]) delete finalSubIds[k]; });
 
-    const mode = cfg.mode || "puppeteer";
-    let result;
-    if (mode === "addlivetag") {
-      result = await addlivetagService.createLink(originalLink, finalSubIds, cfg);
-    } else {
-      result = await worker.createLink(originalLink, finalSubIds);
-      if (!result.ok) {
-        const code = result.code || "SHOPEE_ERROR";
-        if (code === "CAPTCHA") notifier.notify("captcha", "⚠️ Shopee bắt CAPTCHA. Vào noVNC tạo 1 link qua giao diện để giải, rồi thử lại.", worker.SHOT);
-        else if (code === "NOT_LOGGED_IN") notifier.notify("login", "⚠️ Shopee CHƯA ĐĂNG NHẬP. Mở noVNC và đăng nhập lại.", worker.SHOT);
-      }
-    }
+    const result = await worker.createLink(originalLink, finalSubIds);
     if (!result || !result.ok) {
       const code = (result && result.code) || "SHOPEE_ERROR";
+      // Báo động để admin vào giải captcha / đăng nhập lại
+      if (code === "CAPTCHA") {
+        notifier.notify("captcha", "⚠️ Shopee bắt CAPTCHA. Vào noVNC tạo 1 link qua giao diện để giải, rồi thử lại.", worker.SHOT);
+      } else if (code === "NOT_LOGGED_IN") {
+        notifier.notify("login", "⚠️ Shopee CHƯA ĐĂNG NHẬP. Mở noVNC và đăng nhập lại.", worker.SHOT);
+      }
       const status = ERROR_STATUS[code] || 502;
       return res.status(status).json({
         ok: false,
@@ -209,17 +188,10 @@ app.post(
   }),
 );
 
-const REPORT_NOT_SUPPORTED = {
-  ok: false, code: "NOT_SUPPORTED",
-  error: "Report không khả dụng ở mode addlivetag.",
-  hint: "Xem báo cáo tại https://affiliate.shopee.vn/report/conversion_report hoặc dùng Shopee Open API (cần app_id + secret_key).",
-};
-
 // ===== Báo cáo chuyển đổi =====
 app.get(
   "/api/report",
   wrap(async (req, res) => {
-    if (getMode() === "addlivetag") return res.status(501).json(REPORT_NOT_SUPPORTED);
     const r = await worker.getReport({
       days: req.query.days ? Number(req.query.days) : undefined,
       pageNum: req.query.page ? Number(req.query.page) : undefined,
@@ -237,7 +209,6 @@ app.get(
 app.get(
   "/api/report/by-subid",
   wrap(async (req, res) => {
-    if (getMode() === "addlivetag") return res.status(501).json(REPORT_NOT_SUPPORTED);
     const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
     const days = req.query.days ? Number(req.query.days) : 7;
     const r = await worker.getReport({ days, pageSize: 100 });
@@ -258,37 +229,28 @@ app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm th�
 
 // Chỉ khởi động khi chạy trực tiếp (node src/server.js)
 if (require.main === module) {
-  const cfg = loadConfig();
-  const port = process.env.PORT || cfg.port || 3000;
-  const mode = cfg.mode || "puppeteer";
+  const port = process.env.PORT || loadConfig().port || 3000;
   (async () => {
-    if (mode === "addlivetag") {
-      const alt = cfg.addlivetag || {};
-      console.log("🧭 Mode: addlivetag — không cần Chrome.");
-      if (!alt.apiKey) console.warn("   ⚠️  addlivetag.apiKey chưa đặt.");
-      if (!alt.affid)  console.warn("   ⚠️  addlivetag.affid chưa đặt.");
-      if (alt.apiKey && alt.affid) console.log("   addlivetag OK — sẵn sàng tạo link.");
-    } else {
-      console.log("🧭 Mode: puppeteer — đang mở Chrome...");
-      try {
-        const st = await worker.init(cfg);
-        console.log(`   Chrome sẵn sàng | headless: ${st.headless} | đăng nhập Shopee: ${st.loggedIn ? "OK" : "CHƯA (gọi /api/worker/open-login để login)"}`);
-      } catch (e) {
-        console.error("   Puppeteer init lỗi:", e.message);
-      }
-      // Health-loop: tự phát hiện mất đăng nhập -> báo động (mỗi 60s)
-      let wasLoggedIn = worker.getStatus().loggedIn;
-      setInterval(() => {
-        const s = worker.getStatus();
-        if (wasLoggedIn && !s.loggedIn) {
-          notifier.notify("login", "⚠️ Chrome bot vừa MẤT ĐĂNG NHẬP Shopee. Vào đăng nhập lại để tiếp tục tạo link.", worker.SHOT);
-        }
-        wasLoggedIn = s.loggedIn;
-      }, 60000).unref?.();
+    console.log("🧭 Mode: puppeteer — đang mở Chrome...");
+    try {
+      const st = await worker.init(loadConfig());
+      console.log(`   Chrome sẵn sàng | headless: ${st.headless} | đăng nhập Shopee: ${st.loggedIn ? "OK" : "CHƯA (gọi /api/worker/open-login để login)"}`);
+    } catch (e) {
+      console.error("   Puppeteer init lỗi:", e.message);
     }
     app.listen(port, () => {
-      console.log(`🚀 Shopee Aff API đang chạy tại http://localhost:${port} (mode: ${mode})`);
+      console.log(`🚀 Shopee Aff API đang chạy tại http://localhost:${port}`);
     });
+
+    // Health-loop: tự phát hiện mất đăng nhập -> báo động (mỗi 60s)
+    let wasLoggedIn = worker.getStatus().loggedIn;
+    setInterval(() => {
+      const s = worker.getStatus();
+      if (wasLoggedIn && !s.loggedIn) {
+        notifier.notify("login", "⚠️ Chrome bot vừa MẤT ĐĂNG NHẬP Shopee. Vào đăng nhập lại để tiếp tục tạo link.", worker.SHOT);
+      }
+      wasLoggedIn = s.loggedIn;
+    }, 60000).unref?.();
   })();
 }
 

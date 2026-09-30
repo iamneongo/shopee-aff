@@ -3,49 +3,25 @@ const path = require("path");
 
 const CONFIG_PATH = path.join(__dirname, "..", "config.json");
 
-// Đọc config từ config.json (nếu có) rồi merge với env vars.
-// Env vars luôn thắng để Dokploy/Docker có thể inject mà không cần file.
+// Đọc config.json mới mỗi lần gọi.
+// Nhờ vậy khi token/cookie hết hạn, bạn chỉ cần sửa config.json
+// mà KHÔNG phải khởi động lại server.
 function loadConfig() {
-  let fileConfig = {};
+  let raw;
   try {
-    fileConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-  } catch {
-    // config.json không bắt buộc khi dùng env vars
-  }
-
-  const env = process.env;
-  const envOverrides = {};
-
-  if (env.MODE)           envOverrides.mode   = env.MODE;
-  if (env.SERVER_API_KEY) envOverrides.apiKey = env.SERVER_API_KEY;
-  if (env.PORT)           envOverrides.port   = Number(env.PORT);
-
-  if (env.ADDLIVETAG_API_KEY || env.ADDLIVETAG_AFFID) {
-    envOverrides.addlivetag = {
-      ...(fileConfig.addlivetag || {}),
-      ...(env.ADDLIVETAG_API_KEY ? { apiKey: env.ADDLIVETAG_API_KEY } : {}),
-      ...(env.ADDLIVETAG_AFFID   ? { affid:  env.ADDLIVETAG_AFFID   } : {}),
-    };
-  }
-
-  if (env.SADCAPTCHA_API_KEY) {
-    envOverrides.sadcaptcha = {
-      ...(fileConfig.sadcaptcha || {}),
-      apiKey: env.SADCAPTCHA_API_KEY,
-    };
-  }
-
-  const cfg = { ...fileConfig, ...envOverrides };
-
-  // Chỉ báo lỗi nếu cả file lẫn env đều trống hoàn toàn
-  if (!cfg.mode && !cfg.puppeteer && !cfg.addlivetag) {
+    raw = fs.readFileSync(CONFIG_PATH, "utf8");
+  } catch (err) {
     throw new Error(
-      `Chưa có config. Copy config.example.json → config.json và điền thông tin, ` +
-      `hoặc đặt env vars MODE, ADDLIVETAG_API_KEY, ADDLIVETAG_AFFID.`
+      `Không đọc được config.json (${CONFIG_PATH}). ` +
+        `Hãy copy config.example.json thành config.json rồi điền cookie/token. Chi tiết: ${err.message}`,
     );
   }
 
-  return cfg;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`config.json không phải JSON hợp lệ: ${err.message}`);
+  }
 }
 
 module.exports = { loadConfig, CONFIG_PATH };
