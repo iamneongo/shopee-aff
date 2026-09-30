@@ -1,6 +1,11 @@
 {
     "port": 4000,
     "apiKey": "ĐẶT_API_KEY_MẠNH_Ở_ĐÂY",
+    "mode": "addlivetag",
+    "addlivetag": {
+        "apiKey": "",
+        "affid": ""
+    },
     "sadcaptcha": {
         "apiKey": ""
     },
