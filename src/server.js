@@ -209,10 +209,17 @@ app.post(
   }),
 );
 
+const REPORT_NOT_SUPPORTED = {
+  ok: false, code: "NOT_SUPPORTED",
+  error: "Report không khả dụng ở mode addlivetag.",
+  hint: "Xem báo cáo tại https://affiliate.shopee.vn/report/conversion_report hoặc dùng Shopee Open API (cần app_id + secret_key).",
+};
+
 // ===== Báo cáo chuyển đổi =====
 app.get(
   "/api/report",
   wrap(async (req, res) => {
+    if (getMode() === "addlivetag") return res.status(501).json(REPORT_NOT_SUPPORTED);
     const r = await worker.getReport({
       days: req.query.days ? Number(req.query.days) : undefined,
       pageNum: req.query.page ? Number(req.query.page) : undefined,
@@ -230,6 +237,7 @@ app.get(
 app.get(
   "/api/report/by-subid",
   wrap(async (req, res) => {
+    if (getMode() === "addlivetag") return res.status(501).json(REPORT_NOT_SUPPORTED);
     const subIds = (req.query.subIds || "").split(",").map((s) => s.trim()).filter(Boolean);
     const days = req.query.days ? Number(req.query.days) : 7;
     const r = await worker.getReport({ days, pageSize: 100 });
