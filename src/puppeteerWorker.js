@@ -734,23 +734,53 @@ async function captchaDebug() {
   return enqueue(async () => {
     if (!page) return { ok: false, error: "no page" };
     const dom = await inspectCaptchaDOM();
+
+    // Check iframes
+    const frames = page.frames();
+    const frameInfo = [];
+    for (const f of frames) {
+      try {
+        const fUrl = f.url();
+        const fData = await f.evaluate(() => {
+          const canvases = Array.from(document.querySelectorAll("canvas")).map(c => {
+            const r = c.getBoundingClientRect();
+            return { cssW: Math.round(r.width), cssH: Math.round(r.height), iW: c.width, iH: c.height };
+          });
+          const imgs = Array.from(document.querySelectorAll("img")).filter(i => {
+            const r = i.getBoundingClientRect(); return r.width > 20;
+          }).map(i => {
+            const r = i.getBoundingClientRect();
+            return { cssW: Math.round(r.width), draggable: i.draggable, isData: i.src.startsWith("data:") };
+          });
+          const sliders = Array.from(document.querySelectorAll("[style*='translateX']")).map(el => {
+            const r = el.getBoundingClientRect();
+            return { tag: el.tagName, w: Math.round(r.width), h: Math.round(r.height), style: (el.getAttribute("style")||"").slice(0,80) };
+          });
+          const divBgs = Array.from(document.querySelectorAll("div[style*='background']")).filter(el => {
+            const r = el.getBoundingClientRect(); return r.width > 100 && r.height > 80;
+          }).map(el => {
+            const r = el.getBoundingClientRect();
+            const s = el.getAttribute("style") || "";
+            return { w: Math.round(r.width), h: Math.round(r.height), hasBgImg: s.includes("url("), style50: s.slice(0, 50) };
+          });
+          return { canvases, imgs, sliders, divBgs };
+        }).catch(() => null);
+        frameInfo.push({ url: fUrl.slice(0, 60), data: fData });
+      } catch {}
+    }
+
     const widths = await page.evaluate(() => {
       const slider = document.querySelector('div[style*="transform: translateX"]');
       const trackW = slider && slider.parentElement ? slider.parentElement.getBoundingClientRect().width : 0;
-      const canvases = Array.from(document.querySelectorAll("canvas")).map(c => {
-        const r = c.getBoundingClientRect();
-        return { cssW: Math.round(r.width), cssH: Math.round(r.height), intrinsicW: c.width, intrinsicH: c.height };
-      });
-      const imgs = Array.from(document.querySelectorAll("img")).filter(i => {
-        const r = i.getBoundingClientRect(); return r.width > 30;
-      }).map(i => {
-        const r = i.getBoundingClientRect();
-        return { cssW: Math.round(r.width), draggable: i.draggable, isData: i.src.startsWith("data:"), src20: i.src.slice(0, 20) };
-      });
       const aside = document.querySelector("aside[aria-modal=true]");
-      return { trackW: Math.round(trackW), canvases, imgs, hasAside: !!aside };
+      const iframes = Array.from(document.querySelectorAll("iframe")).map(f => {
+        const r = f.getBoundingClientRect();
+        return { src: (f.src||"").slice(0,60), w: Math.round(r.width), h: Math.round(r.height) };
+      });
+      return { trackW: Math.round(trackW), hasAside: !!aside, iframes };
     }).catch(e => ({ error: e.message }));
-    return { ok: true, url: page.url(), dom, widths };
+
+    return { ok: true, url: page.url().slice(0, 80), dom, widths, frames: frameInfo };
   });
 }
 
