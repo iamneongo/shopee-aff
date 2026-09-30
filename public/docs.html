@@ -10,8 +10,8 @@
     body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
     header { background:var(--ee4d2d); color:#fff; padding:18px 24px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
     header h1 { margin:0; font-size:20px; }
-    header a { color:#fff; font-size:14px; text-decoration:underline; }
-    .layout { max-width:1040px; margin:0 auto; display:grid; grid-template-columns:220px 1fr; gap:28px; padding:24px 16px; }
+    header a { color:#fff; font-size:14px; text-decoration:underline; margin-left:14px; }
+    .layout { max-width:1040px; margin:0 auto; display:grid; grid-template-columns:230px 1fr; gap:28px; padding:24px 16px; }
     nav { position:sticky; top:24px; align-self:start; font-size:14px; }
     nav a { display:block; color:var(--muted); text-decoration:none; padding:4px 0; }
     nav a:hover { color:var(--ee4d2d); }
@@ -37,7 +37,10 @@
 <body>
   <header>
     <h1>📖 Shopee Aff API — Tài liệu</h1>
-    <a href="/">🧪 Mở trang test</a>
+    <span>
+      <a href="/cookie.html">🍪 Cookie report</a>
+      <a href="/">🧪 Trang test</a>
+    </span>
   </header>
 
   <div class="layout">
@@ -48,46 +51,36 @@
       <a href="#auth">Xác thực</a>
       <div class="grp">Endpoints</div>
       <a href="#health">GET /health</a>
-      <a href="#status">GET /api/worker/status</a>
       <a href="#link">POST /api/link</a>
       <a href="#report">GET /api/report</a>
       <a href="#by-subid">GET /api/report/by-subid</a>
-      <a href="#open-login">GET /api/worker/open-login</a>
-      <a href="#rotate-proxy">GET /api/worker/rotate-proxy</a>
-      <a href="#screenshot">GET /api/worker/screenshot.png</a>
-      <a href="#qr">GET /api/worker/qr.png</a>
+      <a href="#cookie">POST /api/report/cookie</a>
       <a href="#notify-test">GET /api/notify/test</a>
       <div class="grp">Vận hành</div>
       <a href="#errors">Mã lỗi</a>
-      <a href="#captcha">Captcha &amp; Auto-solve</a>
+      <a href="#report-cookie">Cookie report &amp; tần suất</a>
       <a href="#notify">Thông báo (Telegram)</a>
-      <a href="#baotri">Bảo trì (login/captcha)</a>
     </nav>
 
     <main>
       <h2 id="gioi-thieu">Giới thiệu</h2>
       <p>REST API cho <b>hệ thống cashback Shopee affiliate</b>: tạo <b>affiliate link gắn theo từng user</b> (để quy hoa hồng) và <b>lấy báo cáo chuyển đổi</b>. Mọi response là JSON với trường <code>ok: true/false</code>.</p>
-      <div class="danger">⚠️ Dùng API nội bộ Shopee qua session trình duyệt — không phải API chính thức, có thể thay đổi bất cứ lúc nào.</div>
+      <div class="success">✅ <b>Stateless</b> — tạo link chỉ là ghép chuỗi qua endpoint chuyển hướng chính thức của Shopee (<code>s.shopee.vn/an_redir</code>). Không cần Chrome, không captcha, không proxy, không đăng nhập.</div>
 
       <h2 id="kien-truc">Kiến trúc</h2>
-      <p>Shopee kiểm <b>dấu vân tay TLS post-quantum (X25519MLKEM768)</b> ở endpoint tạo link — Node/curl thuần bị chặn (<code>error 90309999</code>). Giải pháp: dùng <b>Puppeteer điều khiển một Chrome thật</b> (đã đăng nhập) để gọi <code>fetch()</code> bên trong trang, TLS khớp Chrome → tạo link được.</p>
-      <pre><code>client → POST /api/link
-          → Express (server.js) → puppeteerWorker.js
-          → page.evaluate(fetch) trong Chrome thật (đã login)
-          → Shopee batchCustomLink API
-          ← shortLink ←──────────────────────────────────────</code></pre>
-      <p>Thao tác Chrome chạy <b>tuần tự</b> (queue) — không tạo nhiều link song song được. Mọi lệnh tạo link đều <code>ensureOnApp()</code> trước: tự điều hướng về <code>affiliate.shopee.vn</code> nếu trang bị đổi, và <b>tự giải captcha</b> nếu Chrome bị redirect sang trang verify.</p>
+      <pre><code>Tạo link:  client → POST /api/link → linkBuilder → chuỗi s.shopee.vn/an_redir
+           (khi user click → Shopee tự gắn tracking + redirect tới sản phẩm)
 
-      <table>
-        <tr><th>Chế độ</th><th>Khi nào dùng</th><th>Cấu hình</th></tr>
-        <tr><td><b>launch</b> (VPS/server)</td><td>Deploy Docker — Chrome tự khởi động cùng container, có Xvfb + noVNC để quản trị từ xa.</td><td><code>connectURL: ""</code>, <code>executablePath: "/usr/bin/google-chrome"</code></td></tr>
-        <tr><td><b>connect</b> (Windows local)</td><td>Máy Windows — Chrome tự launch hay bị lỗi render trắng; bạn tự mở Chrome debug, server gắn vào.</td><td><code>connectURL: "http://127.0.0.1:9222"</code></td></tr>
-      </table>
+Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (bằng cookie)</code></pre>
+      <p><b>Link affiliate</b> có dạng:</p>
+      <pre><code>https://s.shopee.vn/an_redir?origin_link=&lt;url SP&gt;&affiliate_id=&lt;id&gt;&sub_id=&lt;s1-s2-s3-s4-s5&gt;</code></pre>
+      <p>Khi user click, Shopee 301 tới trang sản phẩm và tự gắn <code>utm_source=an_&lt;affiliate_id&gt;</code>, <code>utm_content=&lt;sub_id&gt;</code>, <code>utm_medium=affiliates</code> → hoa hồng quy về đúng affiliate + user. Đây là cơ chế các network (AccessTrade/Involve Asia) vẫn dùng.</p>
+      <div class="note">💡 <b>origin_link</b> nên là URL sản phẩm chuẩn (<code>...-i.&lt;shop&gt;.&lt;item&gt;</code> hoặc <code>/product/&lt;shop&gt;/&lt;item&gt;</code>). Link rút gọn (<code>s.shopee.vn/xxx</code>) được server tự resolve về URL chuẩn trước (nếu không sẽ mất tracking).</div>
+      <p><b>affiliate_id</b> là ID tĩnh của tài khoản affiliate (công khai, nằm trong mọi link). Cấu hình phía server qua env <code>SHOPEE_AFFILIATE_ID</code> hoặc <code>config.affiliateId</code>; có thể override từng request bằng trường <code>affiliateId</code> trong body.</p>
 
       <h2 id="cashback">Cashback &amp; SubIds</h2>
       <p>Shopee cho gắn tối đa <b>5 SubId</b> vào mỗi link; khi có đơn, báo cáo trả lại đúng các SubId → dùng để <b>quy đơn về từng user</b>.</p>
-      <div class="danger">⚠️ SubId chỉ chấp nhận <code>[a-zA-Z0-9]</code>, tối đa 40 ký tự — <b>không dấu gạch dưới, không ký tự đặc biệt</b>. Vi phạm → server trả <code>400 INVALID_SUBID</code> trước khi gọi Shopee.</div>
-      <p>Quy ước mặc định (đổi ở <code>config.defaultSubIds</code>):</p>
+      <div class="danger">⚠️ SubId chỉ chấp nhận <code>[a-zA-Z0-9]</code>, tối đa 40 ký tự — <b>không dấu gạch dưới, không ký tự đặc biệt</b>. Vi phạm → server trả <code>400 INVALID_SUBID</code> trước khi tạo link.</div>
       <table>
         <tr><th>SubId</th><th>Ý nghĩa</th><th>Ví dụ</th></tr>
         <tr><td><code>subId1</code></td><td><b>userId</b> — người nhận cashback (truyền qua trường <code>userId</code>)</td><td><code>u12345</code></td></tr>
@@ -99,77 +92,51 @@
       <ol>
         <li>User bấm "lấy link" → gọi <code>POST /api/link</code> kèm <code>userId</code> → link gắn <code>subId1 = userId</code>.</li>
         <li>User mua hàng qua link đó.</li>
-        <li>Định kỳ gọi <code>GET /api/report/by-subid?subIds=&lt;userId&gt;</code> → ra đơn + hoa hồng → tính cashback.</li>
+        <li>Cron định kỳ gọi <code>GET /api/report/by-subid?subIds=&lt;userId&gt;</code> → ra đơn + hoa hồng → cộng cashback.</li>
       </ol>
-      <div class="note">💡 Nên <b>cache</b> <code>(userId, originalLink) → shortLink</code> ở DB riêng — link Shopee là vĩnh viễn, lần sau dùng lại khỏi gọi API, giảm tải Chrome và tránh anti-bot.</div>
+      <div class="note">💡 Nên <b>cache</b> <code>(userId, originalLink) → shortLink</code> ở DB riêng — link Shopee là vĩnh viễn. (Thực ra link an_redir là tất định nên có thể tự dựng, nhưng cache vẫn giảm số lần gọi.)</div>
 
       <h2 id="auth">Xác thực</h2>
-      <p>Nếu <code>config.apiKey</code> (hoặc biến môi trường) khác rỗng, mọi request <code>/api/*</code> phải kèm header:</p>
+      <p>Nếu <code>config.apiKey</code> khác rỗng, mọi request <code>/api/*</code> phải kèm header:</p>
       <pre><code>x-api-key: &lt;apiKey của bạn&gt;</code></pre>
 
       <h2>Endpoints</h2>
 
       <div class="ep" id="health">
         <h3><span class="method get">GET</span> <code>/health</code></h3>
-        <p>Kiểm tra server sống + liệt kê endpoint. Không yêu cầu <code>x-api-key</code>.</p>
-        <pre><code>{ "ok": true, "service": "shopee-aff-api", "mode": "puppeteer", "endpoints": [ ... ] }</code></pre>
-      </div>
-
-      <div class="ep" id="status">
-        <h3><span class="method get">GET</span> <code>/api/worker/status</code></h3>
-        <p>Trạng thái Chrome worker. Nên kiểm tra trước khi tạo link hàng loạt.</p>
-        <pre><code>{
-  "ok": true, "mode": "puppeteer",
-  "online": true,        // = ready && loggedIn
-  "ready": true,         // Chrome đã khởi động
-  "loggedIn": true,      // đang đăng nhập Shopee
-  "headless": false
-}</code></pre>
-        <p><code>loggedIn:false</code> → cần đăng nhập lại qua noVNC (production) hoặc cửa sổ Chrome bot (local).</p>
+        <p>Kiểm tra server sống. Không yêu cầu <code>x-api-key</code>.</p>
+        <pre><code>{ "ok": true, "service": "shopee-aff-api", "mode": "stateless", "endpoints": [ ... ] }</code></pre>
       </div>
 
       <div class="ep" id="link">
         <h3><span class="method post">POST</span> <code>/api/link</code></h3>
-        <p>Tạo affiliate link gắn theo user. Chrome xử lý tuần tự — không gọi song song.</p>
+        <p>Tạo affiliate link gắn theo user. Stateless, phản hồi tức thì.</p>
         <b>Body (JSON)</b>
         <table>
           <tr><th>Trường</th><th>Kiểu</th><th>Bắt buộc</th><th>Mô tả</th></tr>
-          <tr><td><code>originalLink</code></td><td>string</td><td>✅</td><td>Link Shopee cần tạo aff (shopee.vn hoặc s.shopee.vn)</td></tr>
+          <tr><td><code>originalLink</code></td><td>string</td><td>✅</td><td>Link Shopee (sản phẩm hoặc rút gọn s.shopee.vn)</td></tr>
           <tr><td><code>userId</code></td><td>string</td><td>—</td><td>Mã user nhận cashback → gắn vào <code>subId1</code>. Chỉ <code>[a-zA-Z0-9]</code>, tối đa 40 ký tự.</td></tr>
-          <tr><td><code>subIds</code></td><td>object</td><td>—</td><td>Ghi đè/bổ sung <code>{ subId1..subId5 }</code> (<code>userId</code> thắng <code>subId1</code> nếu cả hai có). Mỗi giá trị chỉ <code>[a-zA-Z0-9]</code>.</td></tr>
+          <tr><td><code>subIds</code></td><td>object</td><td>—</td><td>Ghi đè/bổ sung <code>{ subId1..subId5 }</code> (<code>userId</code> thắng <code>subId1</code>).</td></tr>
+          <tr><td><code>affiliateId</code></td><td>string</td><td>—</td><td>Override affiliate_id (mặc định lấy từ env/config server).</td></tr>
         </table>
         <b>Ví dụ</b>
         <pre><code>curl -X POST https://shopee-api.apps.neooi.com/api/link \
-  -H "x-api-key: &lt;key&gt;" \
-  -H "Content-Type: application/json" \
+  -H "x-api-key: &lt;key&gt;" -H "Content-Type: application/json" \
   -d '{"originalLink":"https://s.shopee.vn/xxxxx","userId":"u12345"}'</code></pre>
         <b>Response thành công</b>
         <pre><code>{
   "ok": true,
   "userId": "u12345",
   "subIds": { "subId1": "u12345", "subId2": "web", "subId3": "cashback" },
-  "shortLink": "https://s.shopee.vn/AAHVnUO8mx",
-  "longLink": "https://shopee.vn/universal-link/product/..."
+  "shortLink": "https://s.shopee.vn/an_redir?origin_link=...&affiliate_id=...&sub_id=u12345-web-cashback",
+  "longLink": "https://shopee.vn/product/&lt;shop&gt;/&lt;item&gt;"
 }</code></pre>
-        <b>Response lỗi (cấu trúc chung)</b>
-        <pre><code>{ "ok": false, "code": "INVALID_SUBID", "error": "userId không hợp lệ: ...", "hint": "..." }</code></pre>
-        <b>Mã lỗi thường gặp với endpoint này</b>
-        <table>
-          <tr><th>code</th><th>HTTP</th><th>Nghĩa &amp; cách xử lý</th></tr>
-          <tr><td><code>MISSING_LINK</code></td><td>400</td><td>Thiếu <code>originalLink</code>.</td></tr>
-          <tr><td><code>INVALID_SUBID</code></td><td>400</td><td><code>userId</code> hoặc <code>subIds</code> chứa ký tự không hợp lệ. Sửa request.</td></tr>
-          <tr><td><code>WORKER_NOT_READY</code></td><td>503</td><td>Chrome chưa khởi động xong. Thử lại sau vài giây.</td></tr>
-          <tr><td><code>NOT_LOGGED_IN</code></td><td>503</td><td>Chưa đăng nhập Shopee. Admin vào noVNC đăng nhập lại.</td></tr>
-          <tr><td><code>CAPTCHA</code></td><td>503</td><td>Auto-solve thất bại. Admin vào noVNC giải tay rồi thử lại.</td></tr>
-          <tr><td><code>SHOPEE_FAIL_2</code></td><td>502</td><td>URL sai định dạng. Dùng link trực tiếp shopee.vn.</td></tr>
-          <tr><td><code>SHOPEE_FAIL_3</code></td><td>502</td><td>Sản phẩm không trong chương trình affiliate hoặc sub_id lỗi.</td></tr>
-          <tr><td><code>SHOPEE_FAIL_4</code></td><td>502</td><td>Vượt giới hạn Shopee. Thử lại sau ít phút.</td></tr>
-        </table>
+        <p><code>shortLink</code> là link gửi cho user (click sẽ được tracking). <code>longLink</code> là URL sản phẩm chuẩn đã resolve.</p>
       </div>
 
       <div class="ep" id="report">
         <h3><span class="method get">GET</span> <code>/api/report</code></h3>
-        <p>Lấy danh sách đơn chuyển đổi.</p>
+        <p>Lấy danh sách đơn chuyển đổi. Đọc bằng <b>cookie</b> — xem mục <a href="#report-cookie">Cookie report</a>.</p>
         <b>Query params</b>
         <table>
           <tr><th>Param</th><th>Mặc định</th><th>Mô tả</th></tr>
@@ -179,148 +146,90 @@
         </table>
         <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/report?days=7"</code></pre>
         <pre><code>{
-  "ok": true,
-  "total": 12,
+  "ok": true, "total": 12,
   "list": [
-    {
-      "order_sn": "25092700ABC",
-      "sub_ids": ["u12345", "web", "cashback"],
-      "commission": "12500",
-      "order_status": "COMPLETED",
-      "purchase_time": 1727395200,
-      "shop_name": "...",
-      "item_name": "..."
-    }
+    { "order_sn": "25092700ABC", "sub_ids": ["u12345","web","cashback"],
+      "commission": "12500", "order_status": "COMPLETED",
+      "purchase_time": 1727395200, "shop_name": "...", "item_name": "..." }
   ]
 }</code></pre>
-        <p>Quy user từ <code>sub_ids[0]</code> (= <code>subId1</code> = userId). Dùng <code>order_sn</code> làm khoá idempotent khi UPSERT.</p>
+        <p>Quy user từ <code>sub_ids[0]</code> (= userId). Dùng <code>order_sn</code> làm khoá idempotent khi UPSERT.</p>
       </div>
 
       <div class="ep" id="by-subid">
         <h3><span class="method get">GET</span> <code>/api/report/by-subid</code></h3>
         <p>Lọc đơn theo SubID — lấy đơn của <b>một user cụ thể</b>.</p>
-        <b>Query params</b>
         <table>
           <tr><th>Param</th><th>Mặc định</th><th>Mô tả</th></tr>
-          <tr><td><code>subIds</code></td><td>—</td><td>Danh sách SubID cách nhau dấu phẩy (thường truyền userId)</td></tr>
+          <tr><td><code>subIds</code></td><td>—</td><td>Danh sách SubID cách nhau dấu phẩy (thường là userId)</td></tr>
           <tr><td><code>days</code></td><td>7</td><td>Số ngày gần nhất</td></tr>
         </table>
         <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/report/by-subid?subIds=u12345&days=30"</code></pre>
         <pre><code>{ "ok": true, "total": 40, "matchedCount": 3, "subIds": ["u12345"], "matched": [ ... ] }</code></pre>
       </div>
 
-      <div class="ep" id="open-login">
-        <h3><span class="method get">GET</span> <code>/api/worker/open-login</code></h3>
-        <p>Điều hướng Chrome tới <code>affiliate.shopee.vn</code> (hoặc URL tuỳ ý qua <code>?url=</code>). Dùng khi Chrome đang ở trang lạ hoặc cần khởi động lại session.</p>
-        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/worker/open-login"</code></pre>
-        <pre><code>{ "ok": true, "url": "https://affiliate.shopee.vn/offer/custom_link", "loggedIn": true }</code></pre>
-      </div>
-
-      <div class="ep" id="rotate-proxy">
-        <h3><span class="method get">GET</span> <code>/api/worker/rotate-proxy</code></h3>
-        <p>Tự động lấy proxy Việt Nam miễn phí (từ ProxyScrape + GeoNode API), test TCP, rồi <b>khởi động lại Chrome</b> với proxy đó. Chrome tắt ~5–10 giây sau đó mở lại.</p>
-        <p>Dùng khi IP server bị Shopee bắt captcha liên tục và auto-solve thất bại.</p>
-        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/worker/rotate-proxy"</code></pre>
-        <b>Response thành công</b>
-        <pre><code>{ "ok": true, "proxy": "http://14.225.240.23:8562", "ready": true, "loggedIn": true, "headless": false }</code></pre>
-        <b>Response lỗi</b>
-        <pre><code>{ "ok": false, "code": "NO_PROXY", "error": "Không tìm thấy proxy VN nào hoạt động từ proxy5.net." }</code></pre>
-        <div class="note">⚠️ Sau khi đổi proxy, Chrome sẽ cần đăng nhập lại Shopee nếu session bị mất. Kiểm tra <code>loggedIn</code> trong response; nếu <code>false</code> → vào noVNC đăng nhập lại. Proxy miễn phí là datacenter VN — tốt hơn IP nước ngoài nhưng Shopee vẫn có thể bắt captcha; proxy residential cho kết quả tốt hơn.</div>
-      </div>
-
-      <div class="ep" id="screenshot">
-        <h3><span class="method get">GET</span> <code>/api/worker/screenshot.png</code></h3>
-        <p>Trả ảnh chụp màn hình Chrome hiện tại (PNG). Dùng để xem trạng thái từ xa mà không cần mở noVNC.</p>
-        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/worker/screenshot.png" --output screen.png</code></pre>
-      </div>
-
-      <div class="ep" id="qr">
-        <h3><span class="method get">GET</span> <code>/api/worker/qr.png</code></h3>
-        <p>Điều hướng Chrome tới màn hình đăng nhập QR Shopee rồi trả ảnh PNG — quét bằng app Shopee để đăng nhập không cần nhập mật khẩu.</p>
-        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/worker/qr.png" --output qr.png</code></pre>
+      <div class="ep" id="cookie">
+        <h3><span class="method post">POST</span> <code>/api/report/cookie</code></h3>
+        <p>Cập nhật cookie đọc report (lưu ở volume, bền qua redeploy). Thường dùng qua giao diện <a href="/cookie.html">/cookie.html</a>.</p>
+        <pre><code>curl -X POST https://shopee-api.apps.neooi.com/api/report/cookie \
+  -H "x-api-key: &lt;key&gt;" -H "Content-Type: application/json" \
+  -d '{"cookie":"SPC_F=...; SPC_ST=...; csrftoken=...; ..."}'</code></pre>
+        <pre><code>{ "ok": true, "length": 1234, "updatedAt": "2026-09-30T..." }</code></pre>
+        <p><code>GET /api/report/cookie</code> → kiểm tra trạng thái: <code>{ ok, configured, length, updatedAt }</code>.</p>
       </div>
 
       <div class="ep" id="notify-test">
         <h3><span class="method get">GET</span> <code>/api/notify/test</code></h3>
-        <p>Gửi 1 tin thông báo test (kèm ảnh màn hình) đến Telegram/webhook đã cấu hình. Dùng để kiểm tra cấu hình notify.</p>
+        <p>Gửi 1 tin test đến Telegram/webhook đã cấu hình.</p>
         <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/notify/test"</code></pre>
-        <pre><code>{ "ok": true, "detail": { ... } }</code></pre>
       </div>
 
       <h2 id="errors">Mã lỗi</h2>
-      <p>Mọi lỗi đều trả cùng cấu trúc JSON, kèm <code>hint</code> khi có hướng xử lý cụ thể:</p>
-      <pre><code>{ "ok": false, "code": "CAPTCHA", "error": "Shopee yêu cầu xác thực CAPTCHA.", "hint": "Admin cần vào noVNC..." }</code></pre>
+      <p>Mọi lỗi trả cùng cấu trúc, kèm <code>hint</code> khi có:</p>
+      <pre><code>{ "ok": false, "code": "NO_REPORT_COOKIE", "error": "...", "hint": "..." }</code></pre>
       <table>
         <tr><th>HTTP</th><th>code</th><th>Ý nghĩa &amp; cách xử lý</th></tr>
-        <tr><td>400</td><td><code>MISSING_LINK</code></td><td>Thiếu <code>originalLink</code> trong body.</td></tr>
-        <tr><td>400</td><td><code>INVALID_SUBID</code></td><td><code>userId</code> hoặc <code>subIds</code> chứa ký tự không hợp lệ. Chỉ <code>[a-zA-Z0-9]</code>, tối đa 40 ký tự.</td></tr>
+        <tr><td>400</td><td><code>MISSING_LINK</code></td><td>Thiếu <code>originalLink</code>.</td></tr>
+        <tr><td>400</td><td><code>INVALID_SUBID</code></td><td><code>userId</code>/<code>subIds</code> có ký tự không hợp lệ. Chỉ <code>[a-zA-Z0-9]</code>.</td></tr>
+        <tr><td>400</td><td><code>MISSING_COOKIE</code></td><td>POST cookie nhưng body rỗng.</td></tr>
         <tr><td>401</td><td>—</td><td>Sai hoặc thiếu <code>x-api-key</code>.</td></tr>
         <tr><td>404</td><td>—</td><td>Sai endpoint.</td></tr>
-        <tr><td>503</td><td><code>WORKER_NOT_READY</code></td><td>Chrome chưa sẵn sàng. Thử lại sau vài giây.</td></tr>
-        <tr><td>503</td><td><code>NOT_LOGGED_IN</code></td><td>Chưa đăng nhập Shopee. Admin đăng nhập lại qua noVNC.</td></tr>
-        <tr><td>503</td><td><code>CAPTCHA</code></td><td>Auto-solve thất bại. Admin vào noVNC giải tay.</td></tr>
-        <tr><td>503</td><td><code>FETCH_ERROR</code></td><td>Chrome mất kết nối Shopee khi gọi API. Gọi <code>/api/worker/open-login</code> rồi thử lại.</td></tr>
-        <tr><td>503</td><td><code>PAGE_NAVIGATED</code></td><td>Trang bị đổi giữa chừng. Thử lại ngay.</td></tr>
-        <tr><td>502</td><td><code>SHOPEE_FAIL_1</code></td><td>Link đã được chuyển đổi trước đó.</td></tr>
-        <tr><td>502</td><td><code>SHOPEE_FAIL_2</code></td><td>URL sai định dạng. Dùng link shopee.vn trực tiếp.</td></tr>
-        <tr><td>502</td><td><code>SHOPEE_FAIL_3</code></td><td>Sản phẩm không trong chương trình affiliate hoặc sub_id lỗi.</td></tr>
-        <tr><td>502</td><td><code>SHOPEE_FAIL_4</code></td><td>Vượt giới hạn Shopee. Thử lại sau vài phút.</td></tr>
-        <tr><td>503</td><td><code>NO_PROXY</code></td><td>Không tìm được proxy VN nào hoạt động (chỉ trả bởi <code>/api/worker/rotate-proxy</code>).</td></tr>
-        <tr><td>500</td><td><code>INTERNAL_ERROR</code></td><td>Lỗi không xác định. Xem logs.</td></tr>
+        <tr><td>500</td><td><code>NO_AFFILIATE_ID</code></td><td>Server chưa cấu hình affiliate_id (env <code>SHOPEE_AFFILIATE_ID</code> / <code>config.affiliateId</code>).</td></tr>
+        <tr><td>502</td><td><code>SHOPEE_FAIL_2</code></td><td>Không nhận diện được sản phẩm từ link. Dùng link shopee.vn hợp lệ.</td></tr>
+        <tr><td>503</td><td><code>NO_REPORT_COOKIE</code></td><td>Chưa cấu hình cookie report. Vào <a href="/cookie.html">/cookie.html</a> dán cookie.</td></tr>
+        <tr><td>500</td><td><code>INTERNAL_ERROR</code></td><td>Lỗi khác (vd cookie report hết hạn — Shopee trả 90309999). Cập nhật cookie mới.</td></tr>
       </table>
 
-      <h2 id="captcha">Captcha &amp; Auto-solve</h2>
-      <div class="success">✅ Hệ thống tích hợp <b>SadCaptcha</b> — tự động giải Shopee slider captcha, retry tối đa 3 lần với puzzle mới mỗi lần.</div>
-      <p>Khi Chrome bị redirect sang trang verify/captcha hoặc Shopee trả <code>error 90309999</code>, hệ thống thực hiện vòng lặp:</p>
+      <h2 id="report-cookie">Cookie report &amp; tần suất</h2>
+      <p>Report đọc bằng cookie affiliate.shopee.vn (không bị chặn TLS/captcha như tạo link). Cookie sống ~1–2 tuần.</p>
+      <b>Cập nhật cookie</b>
       <ol>
-        <li>Nếu đang ở trang <b>"Verification timed out"</b> → tự click <b>Go Back</b> để quay lại trang captcha.</li>
-        <li>Puppeteer chụp ảnh <b>puzzle background</b> + <b>puzzle piece</b> ngay trong trang.</li>
-        <li>Gửi lên <b>SadCaptcha API</b> (<code>sadcaptcha.com/api/v1/shopeeSlider</code>) → nhận pixel offset cần kéo.</li>
-        <li>Kéo slider với chuyển động ease-in-out 35 bước + nhiễu ±2px (trông tự nhiên).</li>
-        <li>Kiểm tra: puzzle biến mất → giải thành công → retry tạo link.</li>
-        <li>Nếu thất bại → click nút <b>refresh ↺</b> để lấy puzzle mới → lặp lại từ bước 2 (tối đa 3 lần).</li>
-        <li>Sau 3 lần đều thất bại → trả <code>503 CAPTCHA</code>, gửi thông báo Telegram + ảnh màn hình.</li>
+        <li>Mở <a href="/cookie.html">/cookie.html</a>, nhập API key.</li>
+        <li>Đăng nhập affiliate.shopee.vn → trang Báo cáo chuyển đổi → F12 → Network → request <code>report/list</code> → Request Headers → copy header <b>Cookie</b>.</li>
+        <li>Dán vào ô Cookie → Lưu → Test.</li>
       </ol>
-      <p>Cấu hình: đặt <code>SADCAPTCHA_API_KEY</code> trong biến môi trường (production: Dokploy Env) hoặc <code>config.sadcaptcha.apiKey</code>.</p>
-      <div class="note">💡 IP datacenter bị Shopee bắt captcha thường xuyên hơn IP nhà. Khi auto-solve liên tục thất bại, thử <a href="#rotate-proxy"><code>GET /api/worker/rotate-proxy</code></a> để đổi sang IP Việt Nam khác, hoặc cấu hình proxy residential/4G VN vào <code>config.puppeteer.proxy</code>.</div>
+      <div class="success">✅ Khi cookie hết hạn (report lỗi 90309999) → server tự gửi cảnh báo Telegram/webhook nhắc vào <code>/cookie.html</code>.</div>
+      <b>Tần suất gọi report (khuyến nghị cho cron phía backend cashback)</b>
+      <table>
+        <tr><th>Nhịp</th><th>Khoảng lấy</th><th>Mục đích</th></tr>
+        <tr><td>Mỗi 1–2 giờ</td><td>3–7 ngày</td><td>Bắt đơn mới nhanh</td></tr>
+        <tr><td>Mỗi ngày 1 lần</td><td>30–45 ngày</td><td>Cập nhật xác nhận/hủy (thu hồi cashback)</td></tr>
+      </table>
+      <p>Gọn nhất: <b>1 cron mỗi 2 giờ, lấy 30 ngày</b>. Đừng gọi dày dưới 1 giờ (dữ liệu Shopee cập nhật chậm).</p>
 
       <h2 id="notify">Thông báo (Telegram / Webhook)</h2>
-      <p>Server tự bắn thông báo kèm ảnh màn hình khi cần admin can thiệp (captcha auto-solve thất bại, mất đăng nhập).</p>
-      <b>Cấu hình <code>config.notify</code></b>
+      <p>Server tự bắn thông báo khi cookie report hết hạn. Cấu hình <code>config.notify</code>:</p>
       <pre><code>"notify": {
-  "enabled": true,
-  "cooldownSec": 300,
+  "enabled": true, "cooldownSec": 300,
   "telegram": { "botToken": "123:ABC", "chatId": "123456789" },
   "webhook": "https://..."
 }</code></pre>
-      <b>Lấy Telegram botToken + chatId</b>
       <ol>
-        <li>Chat với <code>@BotFather</code> → <code>/newbot</code> → lấy <b>botToken</b>.</li>
-        <li>Nhắn 1 tin cho bot vừa tạo, mở <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> → lấy <b>chat.id</b>.</li>
-        <li>Điền vào <code>config.notify.telegram</code> (production: sửa File Mount trong Dokploy → Redeploy).</li>
+        <li>Chat <code>@BotFather</code> → <code>/newbot</code> → lấy <b>botToken</b>.</li>
+        <li>Nhắn 1 tin cho bot, mở <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> → lấy <b>chat.id</b>.</li>
+        <li>Điền vào <code>config.notify.telegram</code> (production: File Mount config.json trên Dokploy).</li>
+        <li>Kiểm tra: <code>GET /api/notify/test</code>.</li>
       </ol>
-      <b>Kiểm tra</b>
-      <pre><code>curl -H "x-api-key: &lt;key&gt;" https://shopee-api.apps.neooi.com/api/notify/test</code></pre>
-
-      <h2 id="baotri">Bảo trì (login / captcha)</h2>
-
-      <h3>Production (Dokploy)</h3>
-      <ol>
-        <li><b>Đăng nhập lại</b> (<code>loggedIn:false</code>): mở <a href="https://shopee-vnc.apps.neooi.com/vnc.html" target="_blank">noVNC</a> → nhập VNC password → đăng nhập Shopee trong Chrome đang chạy.</li>
-        <li><b>Captcha thủ công</b>: nếu auto-solve thất bại (nhận thông báo Telegram), vào noVNC → tạo 1 link qua giao diện web <code>affiliate.shopee.vn/offer/custom_link</code> → giải captcha → nhận cookie <code>AC_CERT_D</code> → API chạy lại.</li>
-        <li><b>Xem trạng thái nhanh</b>: <code>GET /api/worker/screenshot.png</code> — không cần mở noVNC.</li>
-        <li><b>Điều hướng Chrome</b>: <code>GET /api/worker/open-login</code> để đưa Chrome về trang affiliate.</li>
-      </ol>
-
-      <h3>Local (Windows)</h3>
-      <ol>
-        <li>Chạy <code>start-chrome.bat</code> để mở Chrome bot (cổng 9222, profile <code>C:\shopee-bot-profile</code>).</li>
-        <li>Đăng nhập Shopee trong cửa sổ đó → chạy <code>npm start</code>.</li>
-        <li>Nếu bị captcha: vào <code>affiliate.shopee.vn</code> trong Chrome bot, tạo 1 link qua giao diện, giải captcha → API chạy lại.</li>
-      </ol>
-
-      <h3>Session hết hạn</h3>
-      <p>Session Shopee hết hạn sau vài ngày đến 2 tuần. Dấu hiệu: <code>loggedIn:false</code> hoặc nhận thông báo "MẤT ĐĂNG NHẬP". Giải pháp: đăng nhập lại qua noVNC.</p>
     </main>
   </div>
 </body>
