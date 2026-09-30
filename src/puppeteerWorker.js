@@ -370,9 +370,12 @@ async function solveImageCrawl(apiKey) {
   console.log(`[captcha][ic] pre-analyze (${pre.status}):`, JSON.stringify(pre.data));
   const slideXProportion = pre.data && typeof pre.data.slideXProportion === "number"
     ? pre.data.slideXProportion : null;
-  if (pre.data && pre.data.skipRecommended) {
+  if (!pre.data || pre.status !== 200) {
+    return { solved: false, reason: "ic_preanalyze_bad", retryFresh: true, detail: { status: pre.status, raw: (pre.raw || "").slice(0, 200) } };
+  }
+  if (pre.data.skipRecommended) {
     console.log("[captcha][ic] skipRecommended → reset lấy captcha khác");
-    return { solved: false, reason: "ic_skip_recommended", retryFresh: true };
+    return { solved: false, reason: "ic_skip_recommended", retryFresh: true, detail: { slideXProportion } };
   }
 
   // Bước 3: ảnh piece (canvas) lúc nghỉ + box nút kéo + box puzzle
@@ -380,7 +383,11 @@ async function solveImageCrawl(apiKey) {
   const btnBox = await findImageCrawlButton();
   const puzzleBox = await getBox(IC_SEL.bg);
   if (!pieceB64 || !btnBox || !puzzleBox) {
-    return { solved: false, reason: `ic_missing(piece=${!!pieceB64},btn=${!!btnBox},bg=${!!puzzleBox})` };
+    return {
+      solved: false,
+      reason: `ic_missing(piece=${!!pieceB64},btn=${!!btnBox},bg=${!!puzzleBox})`,
+      detail: { puzzleB64Len: puzzleB64 ? puzzleB64.length : 0, btnBox, puzzleBox, preStatus: pre.status },
+    };
   }
   const cx = btnBox.x + btnBox.w / 2;
   const cy = btnBox.y + btnBox.h / 2;
@@ -462,7 +469,7 @@ async function solveImageCrawl(apiKey) {
   const solution = resp.data && resp.data.pixelsFromSliderOrigin;
   if (typeof solution !== "number") {
     await page.mouse.up().catch(() => {});
-    return { solved: false, reason: "ic_invalid_solution", retryFresh: true };
+    return { solved: false, reason: "ic_invalid_solution", retryFresh: true, detail: { status: resp.status, raw: (resp.raw || "").slice(0, 200), traj: trajectory.length } };
   }
 
   // Bước 6: thả tại cx + solution (+ nhích nhỏ 0.5% theo extension)
@@ -548,6 +555,7 @@ async function solveCaptcha(maxRetries = 3) {
     return { solved: false, reason: "no_apikey" };
   }
 
+  const log = []; // chẩn đoán từng lần thử (trả về cho endpoint debug)
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     console.log(`[captcha] === Lần thử ${attempt}/${maxRetries} (url=${page.url().split("?")[0]}) ===`);
     try {
@@ -565,17 +573,19 @@ async function solveCaptcha(maxRetries = 3) {
       console.log(`[captcha] Loại captcha: ${type || "không rõ"}`);
       if (!type) {
         if (attempt === 1) await saveShot();
+        log.push({ attempt, type: null, reason: "no_captcha" });
         if (attempt < maxRetries) { await sleep(2500); continue; }
-        return { solved: false, reason: "no_captcha", attempts: attempt };
+        return { solved: false, reason: "no_captcha", attempts: attempt, log };
       }
 
       const r = type === "image_crawl"
         ? await solveImageCrawl(apiKey)
         : await solvePuzzleType(apiKey);
+      log.push({ attempt, type, reason: r.reason || "solved", detail: r.detail });
 
       if (r.solved) {
         console.log(`[captcha] ✅ Giải thành công lần ${attempt} (type=${r.type}).`);
-        return { ...r, attempts: attempt };
+        return { ...r, attempts: attempt, log };
       }
 
       console.log(`[captcha] ⚠️ Lần ${attempt} thất bại: ${r.reason}`);
@@ -587,13 +597,14 @@ async function solveCaptcha(maxRetries = 3) {
       }
     } catch (e) {
       console.error(`[captcha] Lỗi lần ${attempt}:`, e.message);
+      log.push({ attempt, reason: "exception:" + e.message });
       await page.mouse.up().catch(() => {});
       if (attempt < maxRetries) { await sleep(1500); await resetImageCrawl().catch(() => {}); }
     }
   }
 
   console.log("[captcha] ❌ Thất bại sau", maxRetries, "lần.");
-  return { solved: false, reason: "max_retries_exceeded", attempts: maxRetries };
+  return { solved: false, reason: "max_retries_exceeded", attempts: maxRetries, log };
 }
 
 async function saveShot() {
