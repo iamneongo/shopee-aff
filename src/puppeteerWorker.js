@@ -767,8 +767,16 @@ async function captchaDebug() {
             const cs = window.getComputedStyle(el);
             return { tag: el.tagName, cls: (el.className||"").toString().slice(0,60), w: Math.round(r.width), h: Math.round(r.height), bgImg: cs.backgroundImage.slice(0,80) };
           });
-          const bodyHtml = (document.body && document.body.innerHTML || "").slice(0, 3000);
-          return { canvases, imgs, sliders, divsWithBg, bodyHtml };
+          // Lấy HTML bỏ qua style/script tags
+          const bodyClone = document.body ? document.body.cloneNode(true) : null;
+          if (bodyClone) { bodyClone.querySelectorAll("style,script,link").forEach(e => e.remove()); }
+          const bodyHtml = bodyClone ? bodyClone.innerHTML.slice(0, 4000) : "";
+          // Tìm element captcha bằng text content
+          const captchaEls = Array.from(document.querySelectorAll("*")).filter(el => {
+            const t = el.textContent||""; const id=(el.id||"").toLowerCase(); const cls=(el.className||"").toString().toLowerCase();
+            return (t.includes("puzzle") || t.includes("slide") || id.includes("captcha") || cls.includes("captcha") || cls.includes("verify")) && el.getBoundingClientRect().width > 50;
+          }).slice(0,5).map(el => ({ tag: el.tagName, id: el.id, cls: (el.className||"").toString().slice(0,80), w: Math.round(el.getBoundingClientRect().width), h: Math.round(el.getBoundingClientRect().height), outerHtml: el.outerHTML.slice(0,300) }));
+          return { canvases, imgs, sliders, divsWithBg, bodyHtml, captchaEls };
         }).catch(() => null);
         frameInfo.push({ url: fUrl.slice(0, 60), data: fData });
       } catch {}
