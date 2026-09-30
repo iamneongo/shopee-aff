@@ -756,14 +756,19 @@ async function captchaDebug() {
             const r = el.getBoundingClientRect();
             return { tag: el.tagName, w: Math.round(r.width), h: Math.round(r.height), style: (el.getAttribute("style")||"").slice(0,80) };
           });
-          const divBgs = Array.from(document.querySelectorAll("div[style*='background']")).filter(el => {
-            const r = el.getBoundingClientRect(); return r.width > 100 && r.height > 80;
+          // tìm tất cả element lớn có computed background-image
+          const divsWithBg = Array.from(document.querySelectorAll("*")).filter(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width < 80 || r.height < 60) return false;
+            const cs = window.getComputedStyle(el);
+            return cs.backgroundImage && cs.backgroundImage !== "none";
           }).map(el => {
             const r = el.getBoundingClientRect();
-            const s = el.getAttribute("style") || "";
-            return { w: Math.round(r.width), h: Math.round(r.height), hasBgImg: s.includes("url("), style50: s.slice(0, 50) };
+            const cs = window.getComputedStyle(el);
+            return { tag: el.tagName, cls: (el.className||"").toString().slice(0,60), w: Math.round(r.width), h: Math.round(r.height), bgImg: cs.backgroundImage.slice(0,80) };
           });
-          return { canvases, imgs, sliders, divBgs };
+          const bodyHtml = (document.body && document.body.innerHTML || "").slice(0, 3000);
+          return { canvases, imgs, sliders, divsWithBg, bodyHtml };
         }).catch(() => null);
         frameInfo.push({ url: fUrl.slice(0, 60), data: fData });
       } catch {}
