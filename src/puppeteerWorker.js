@@ -336,7 +336,7 @@ async function solveCaptcha(maxRetries = 3) {
       const startX = sliderBox.x + sliderBox.width / 2;
       const startY = sliderBox.y + sliderBox.height / 2;
 
-      // Bước 1: Kéo 10px rồi RELEASE (per SadCaptcha Python library: _drag_slider + mouseup)
+      // Bước 1: Drag 10px — GIỮ CHUỘT (không release) để reveal piece
       await page.mouse.move(startX, startY);
       await sleep(120 + Math.random() * 80);
       await page.mouse.down();
@@ -345,22 +345,19 @@ async function solveCaptcha(maxRetries = 3) {
         await page.mouse.move(startX + i, startY + Math.sin(i / 10 * Math.PI) * 1.5);
         await sleep(35 + Math.random() * 25);
       }
-      await page.mouse.up(); // RELEASE sau 10px
-      console.log("[captcha] Đã kéo 10px và release — đợi piece render...");
-      await sleep(600); // per library: time.sleep(0.5)
+      console.log("[captcha] Đã drag 10px (giữ chuột) — đợi piece render...");
+      await sleep(600); // đợi animation piece (chuột vẫn held)
 
-      // Bước 2: Lấy ảnh từ DOM (src attribute = data URL)
+      // Bước 2: Lấy ảnh trong khi giữ chuột (mouse held tại startX+10)
       const imgs = await getImagesFromPageDOM();
       console.log(`[captcha] Ảnh: bg=${imgs.bg ? imgs.bg.length + "chars" : "null"}, piece=${imgs.piece ? imgs.piece.length + "chars" : "null"}, bgWidth=${imgs.bgWidth}`);
 
-      // Fallback nếu không có data URL: chụp màn hình phần tử
       let bgB64 = imgs.bg;
       let pieceB64 = imgs.piece;
       let bgWidth = imgs.bgWidth;
 
       if (!bgB64) {
-        console.log("[captcha] Lấy canvas data qua toDataURL...");
-        // Dùng evaluate để lấy toDataURL() — raw pixel data, không bị CSS scaling
+        console.log("[captcha] Lấy canvas toDataURL (mouse vẫn held)...");
         const canvasData = await page.evaluate(() => {
           const els = Array.from(document.querySelectorAll("canvas"))
             .filter(c => { const r = c.getBoundingClientRect(); return r.width * r.height > 400; })
@@ -371,7 +368,7 @@ async function solveCaptcha(maxRetries = 3) {
           const out = { bg: null, piece: null, bgW: 0, bgH: 0, pieceW: 0, pieceH: 0 };
           if (els.length > 0) {
             try { out.bg = els[0].toDataURL("image/png").split(",")[1]; } catch (e) {}
-            out.bgW = els[0].width;   // intrinsic canvas width (px, không phải CSS)
+            out.bgW = els[0].width;
             out.bgH = els[0].height;
           }
           if (els.length > 1) {
@@ -384,8 +381,8 @@ async function solveCaptcha(maxRetries = 3) {
         if (canvasData) {
           bgB64 = canvasData.bg;
           pieceB64 = canvasData.piece;
-          bgWidth = canvasData.bgW; // intrinsic width cho tính dist
-          console.log(`[captcha] Canvas: bg=${canvasData.bgW}x${canvasData.bgH}(b64=${bgB64 ? bgB64.length + "c" : "null"}), piece=${canvasData.pieceW}x${canvasData.pieceH}(b64=${pieceB64 ? pieceB64.length + "c" : "null"})`);
+          bgWidth = canvasData.bgW;
+          console.log(`[captcha] Canvas: bg=${canvasData.bgW}x${canvasData.bgH}(${bgB64 ? bgB64.length + "c" : "null"}), piece=${canvasData.pieceW}x${canvasData.pieceH}(${pieceB64 ? pieceB64.length + "c" : "null"})`);
         }
       }
 
@@ -396,7 +393,19 @@ async function solveCaptcha(maxRetries = 3) {
         return { solved: false, reason: "no_bg_image", attempts: attempt };
       }
 
-      // Bước 3: Gọi SadCaptcha /api/v1/puzzle
+      // Bước 3: Lấy track width từ DOM (slider container, không phải canvas width)
+      const trackWidth = await page.evaluate(() => {
+        const slider = document.querySelector('div[style*="transform: translateX"]');
+        if (slider && slider.parentElement) {
+          const pr = slider.parentElement.getBoundingClientRect();
+          if (pr.width > 80) return pr.width;
+        }
+        const canvas = document.querySelector("canvas");
+        return canvas ? canvas.getBoundingClientRect().width : 280;
+      }).catch(() => 280);
+      console.log(`[captcha] trackWidth=${trackWidth}px, bgWidth=${bgWidth}`);
+
+      // Bước 4: Gọi SadCaptcha /api/v1/puzzle (chuột vẫn held tại startX+10)
       console.log("[captcha] Gọi SadCaptcha /api/v1/puzzle...");
       let apiResp;
       try {
@@ -418,36 +427,30 @@ async function solveCaptcha(maxRetries = 3) {
         return { solved: false, reason: "invalid_response", attempts: attempt };
       }
 
-      // Bước 4: Tính pixel dist và kéo đến đích
-      // Per Python library: _drag_slider(slider, total_dist) từ vị trí hiện tại (10px)
-      // → final position = 10 + total_dist
-      const slideBarWidth = bgWidth || 270;
-      const extraDist = Math.round(sadResult.slideXProportion * slideBarWidth);
-      const finalX = startX + 10 + extraDist; // kéo từ 10px, thêm extraDist nữa
-      console.log(`[captcha] slideXProportion=${sadResult.slideXProportion}, barWidth=${slideBarWidth}, extraDist=${extraDist}px, finalX=${Math.round(finalX)}`);
+      // Bước 5: Tính dist rồi kéo tiếp (chuột vẫn held tại startX+10)
+      // totalDist = khoảng kéo TỔNG từ startX (vị trí 0)
+      // slideXProportion × trackWidth = vị trí hole trong ảnh → vị trí slider cần đến
+      const slideBarWidth = trackWidth || bgWidth || 280;
+      const totalDist = Math.round(sadResult.slideXProportion * slideBarWidth);
+      const remainDist = Math.max(0, totalDist - 10); // cần kéo thêm từ 10px hiện tại
+      const finalX = startX + totalDist;
+      console.log(`[captcha] slideXProportion=${sadResult.slideXProportion}, barWidth=${slideBarWidth}, totalDist=${totalDist}px, remain=${remainDist}px, finalX=${Math.round(finalX)}`);
 
-      // Re-grab slider tại vị trí hiện tại (startX+10) rồi kéo natural
-      const grabX = startX + 10;
-      await page.mouse.move(grabX, startY);
-      await sleep(80 + Math.random() * 60);
-      await page.mouse.down();
-      await sleep(60 + Math.random() * 40);
-
-      // Drag with easing (slow start, fast middle, slow end) + slight Y curve
-      const totalSteps = Math.max(20, extraDist);
-      for (let step = 0; step <= totalSteps; step++) {
-        const t = step / totalSteps;
-        // Ease in-out sine
-        const eased = (1 - Math.cos(t * Math.PI)) / 2;
-        const curX = grabX + extraDist * eased;
-        // Natural Y wobble
-        const curY = startY + Math.sin(t * Math.PI) * 2 * (Math.random() > 0.5 ? 1 : -1);
-        await page.mouse.move(curX, curY);
-        // Speed: slower at edges, faster in middle
-        const delay = 8 + Math.round(10 * (1 - Math.sin(t * Math.PI))) + Math.random() * 5;
-        await sleep(delay);
+      // Kéo tiếp từ startX+10 → finalX (mouse vẫn held, ease in-out)
+      if (remainDist > 0) {
+        const curPosX = startX + 10;
+        const steps = Math.max(20, remainDist);
+        for (let step = 0; step <= steps; step++) {
+          const t = step / steps;
+          const eased = (1 - Math.cos(t * Math.PI)) / 2;
+          const curX = curPosX + remainDist * eased;
+          const curY = startY + Math.sin(t * Math.PI) * 2 * (Math.random() > 0.5 ? 1 : -1);
+          await page.mouse.move(curX, curY);
+          const delay = 8 + Math.round(10 * (1 - Math.sin(t * Math.PI))) + Math.random() * 5;
+          await sleep(delay);
+        }
       }
-      // Slight overshoot then settle
+      // Nhỏ overshoot rồi settle
       await page.mouse.move(finalX + 3, startY + 0.5);
       await sleep(80 + Math.random() * 40);
       await page.mouse.move(finalX, startY);
