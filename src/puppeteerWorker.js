@@ -731,8 +731,9 @@ async function restartWithProxy(proxyUrl) {
 }
 
 async function captchaDebug() {
-  return enqueue(async () => {
-    if (!page) return { ok: false, error: "no page" };
+  // Không dùng enqueue để có thể chạy song song với solve đang chạy
+  if (!page) return { ok: false, error: "no page" };
+  return (async () => {
     const dom = await inspectCaptchaDOM();
 
     // Check iframes
@@ -794,7 +795,7 @@ async function captchaDebug() {
     }).catch(e => ({ error: e.message }));
 
     return { ok: true, url: page.url().slice(0, 80), dom, widths, frames: frameInfo };
-  });
+  })();
 }
 
 module.exports = { init, createLink, getReport, navigate, snapshot, showQr, getStatus, shutdown, restartWithProxy, captchaDebug, SHOT };
