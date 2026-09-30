@@ -71,13 +71,19 @@ Cần Chrome cài sẵn. `npm install` rồi `cp config.example.json config.json
 `GET /api/worker/screenshot.png` → ảnh màn hình Chrome hiện tại (nhanh hơn mở noVNC).
 
 ### Captcha — tự giải (SadCaptcha)
-Khi `ensureOnApp()` phát hiện Chrome bị redirect sang trang verify, hoặc Shopee trả `error 90309999` trong `createLink()`:
-1. Puppeteer chụp ảnh `puzzle-bg` + `puzzle-piece` bằng `element.screenshot({encoding:"base64"})`.
-2. Gọi SadCaptcha REST API (`POST sadcaptcha.com/api/v1/shopeeSlider?licenseKey=...`) → nhận `slideXPixels`.
-3. Kéo slider ease-in-out 35 bước + jitter ±2px.
-4. Kiểm tra puzzle biến mất → nếu đã giải, retry `createLink`. Nếu không → trả `503 CAPTCHA`, gửi thông báo Telegram.
+Khi `ensureOnApp()` phát hiện Chrome bị redirect sang trang verify, hoặc Shopee trả `error 90309999`, `solveCaptcha()` trong `puppeteerWorker.js` chạy. **Port trung thực từ extension chính thức `shopee-captcha-solver` v3.0.2** (KHÔNG dùng extension — dùng `page.mouse` của Puppeteer = input qua CDP `isTrusted=true`). Nhận diện & xử lý 2 loại:
 
-Cấu hình: `SADCAPTCHA_API_KEY` env var (ưu tiên) hoặc `config.sadcaptcha.apiKey`.
+- **PUZZLE** (`aside[aria-modal=true]`): puzzle slide đơn giản. Ảnh là `<img>` (data URL). Giữ chuột kéo 10px → lấy ảnh bg+piece → `POST /api/v1/puzzle {puzzleImageB64, pieceImageB64}` → `{slideXProportion}` → `distance = puzzleWidth × slideXProportion` → kéo tới → thả.
+- **IMAGE_CRAWL** (`#NEW_CAPTCHA`): piece "bò" theo quỹ đạo cong. Ảnh là `<canvas>` (`toDataURL()`), nút kéo là `div:has(> svg + svg)`. Flow 3 bước:
+  1. `POST /api/v1/shopee-image-crawl-pre-analyze {image_b64}` → `{slideXProportion, skipRecommended}` (nếu `skipRecommended` → reset ↺ lấy captcha khác).
+  2. Giữ chuột, quét slider 0→85% bước 3px, mỗi bước ghi `{pixels_from_slider_origin, piece_rotation_angle, piece_center:{proportionX,proportionY}}` (piece_center = tâm piece / bbox puzzle). Dừng sớm khi piece vượt `slideXProportion` +15px overshoot, hoặc piece đứng yên.
+  3. `POST /api/v1/shopee-image-crawl {puzzle_image_b64, piece_image_b64, slide_piece_trajectory}` → `{pixelsFromSliderOrigin}` → thả tại `buttonCenter.x + pixelsFromSliderOrigin`.
+
+Giải xong: kiểm tra captcha biến mất (`captchaGone()`) → retry `createLink`. Thất bại sau `maxRetries` (mặc định 3, reset giữa các lần) → trả `503 CAPTCHA` + thông báo Telegram.
+
+Selector/endpoint chuẩn tham chiếu từ source: `github.com/gbiz123/shopee-captcha-solver-chrome-extension` (`script.ts`) và `github.com/gbiz123/shopee-captcha-solver` (`selectors.py`, `api.py`, `models.py`). Cấu hình key: `SADCAPTCHA_API_KEY` env var (ưu tiên) hoặc `config.sadcaptcha.apiKey`.
+
+⚠️ Shopee đổi loại captcha tùy device/IP. Nếu `solveCaptcha` báo `no_captcha` nhưng screenshot thấy captcha → selector đổi, đối chiếu lại 2 repo trên. Debug realtime: `GET /api/captcha/debug`.
 
 ### Đăng nhập / captcha thủ công
 Mở noVNC (`https://shopee-vnc.apps.neooi.com/vnc.html`) → nhập VNC password → trong Chrome:
