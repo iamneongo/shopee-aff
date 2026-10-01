@@ -46,6 +46,7 @@
   <div class="layout">
     <nav>
       <a href="#gioi-thieu">Giới thiệu</a>
+      <a href="#integration">⭐ Hướng dẫn tích hợp</a>
       <a href="#kien-truc">Kiến trúc</a>
       <a href="#cashback">Cashback &amp; SubIds</a>
       <a href="#auth">Xác thực</a>
@@ -55,6 +56,8 @@
       <a href="#report">GET /api/report</a>
       <a href="#by-subid">GET /api/report/by-subid</a>
       <a href="#cookie">POST /api/report/cookie</a>
+      <a href="#selfcheck">GET /api/selfcheck</a>
+      <a href="#notify-config">POST /api/notify/config</a>
       <a href="#notify-test">GET /api/notify/test</a>
       <div class="grp">Vận hành</div>
       <a href="#errors">Mã lỗi</a>
@@ -106,6 +109,51 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
       <p>Nếu <code>config.apiKey</code> khác rỗng, mọi request <code>/api/*</code> phải kèm header:</p>
       <pre><code>x-api-key: &lt;apiKey của bạn&gt;</code></pre>
 
+      <h2 id="integration">⭐ Hướng dẫn tích hợp (cho backend / AI)</h2>
+      <p><b>Base URL:</b> <code>https://shopee-api.apps.neooi.com</code> &nbsp;·&nbsp; <b>Header bắt buộc:</b> <code>x-api-key: &lt;API_KEY&gt;</code> cho mọi <code>/api/*</code>.</p>
+      <p>Đặt ở env backend của bạn: <code>SHOPEE_API=https://shopee-api.apps.neooi.com</code>, <code>SHOPEE_API_KEY=&lt;key&gt;</code>. Mọi response JSON có <code>ok:true/false</code>; lỗi kèm <code>code</code> + <code>error</code>.</p>
+
+      <h3>Luồng 1 — Tạo link cashback (khi user bấm "lấy link")</h3>
+      <p>Nên <b>cache</b> <code>(userId, originalLink) → shortLink</code> ở DB của bạn (link vĩnh viễn) để khỏi gọi lại.</p>
+      <pre><code>async function getCashbackLink(userId, originalLink) {
+  const cached = await db.links.findOne({ userId, originalLink });
+  if (cached) return cached.shortLink;
+  const r = await fetch(process.env.SHOPEE_API + "/api/link", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": process.env.SHOPEE_API_KEY },
+    body: JSON.stringify({ originalLink, userId }), // userId: chỉ [a-zA-Z0-9], ≤ 40 ký tự
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(`link fail ${j.code}: ${j.error}`);
+  await db.links.insert({ userId, originalLink, shortLink: j.shortLink, at: Date.now() });
+  return j.shortLink; // https://s.shopee.vn/an_redir?origin_link=...&affiliate_id=...&sub_id=userId-...
+}</code></pre>
+
+      <h3>Luồng 2 — Đối soát &amp; cộng cashback (cron)</h3>
+      <p>Chạy cron (gợi ý: mỗi 1–2h lấy 3–7 ngày + mỗi ngày quét 30–45 ngày). Dữ liệu report theo <b>checkout</b>; mỗi checkout có <code>utm_content</code> (= sub_id) và mảng <code>orders</code>.</p>
+      <pre><code>async function reconcile() {
+  const r = await fetch(process.env.SHOPEE_API + "/api/report?days=30&size=100",
+    { headers: { "x-api-key": process.env.SHOPEE_API_KEY } }).then(x => x.json());
+  if (!r.ok) { alertAdmin(r.code, r.error); return; } // 503 NO_REPORT_COOKIE → cần cập nhật cookie /cookie.html
+  for (const co of r.list) {
+    const userId = (co.utm_content || "").split("-")[0];          // subId1 = userId
+    if (!userId) continue;
+    const commission = Number(co.estimated_total_commission || co.gross_commission || 0);
+    for (const o of (co.orders || [])) {
+      await upsertOrder({                                          // idempotent theo order_sn
+        orderSn: o.order_sn, userId, commission,
+        status: o.order_status || o.display_order_status,          // "COMPLETED", ...
+        purchaseTime: co.purchase_time,
+      });
+    }
+  }
+}</code></pre>
+      <p>Hoặc lọc sẵn theo 1 user: <code>GET /api/report/by-subid?subIds=&lt;userId&gt;&days=30</code> → <code>matched[]</code> cùng shape checkout.</p>
+      <div class="note">💡 Chỉ <b>trả cashback khi đơn hoàn tất</b> (<code>order_status=COMPLETED</code>); đơn huỷ → thu hồi. <code>order_sn</code> làm khoá UNIQUE để không cộng trùng. Một checkout có thể gồm nhiều order.</div>
+
+      <h3>Giám sát</h3>
+      <p>Gọi <code>GET /api/selfcheck</code> hằng ngày (200 = khỏe, 503 = lỗi — tiện gắn UptimeRobot). Server cũng tự chạy mỗi 24h và báo Telegram khi cookie report hết hạn.</p>
+
       <h2>Endpoints</h2>
 
       <div class="ep" id="health">
@@ -151,15 +199,28 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
           <tr><td><code>size</code></td><td>50</td><td>Số đơn mỗi trang</td></tr>
         </table>
         <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/report?days=7"</code></pre>
+        <p>Dữ liệu theo <b>checkout</b>; sub_id nằm ở <code>utm_content</code> (chuỗi <code>subId1-subId2-...</code>), đơn nằm trong mảng <code>orders</code>:</p>
         <pre><code>{
-  "ok": true, "total": 12,
+  "ok": true, "total": 2,
   "list": [
-    { "order_sn": "25092700ABC", "sub_ids": ["u12345","web","cashback"],
-      "commission": "12500", "order_status": "COMPLETED",
-      "purchase_time": 1727395200, "shop_name": "...", "item_name": "..." }
+    {
+      "checkout_id": "2431354...",
+      "purchase_time": 1789436248,
+      "utm_content": "u12345-web-cashback",        // ← sub_id (subId1-subId2-subId3...)
+      "affiliate_id": 17384700594,
+      "conversion_status": 3,                       // mã số trạng thái chuyển đổi
+      "gross_commission": 0,
+      "estimated_total_commission": 0,             // hoa hồng dự kiến
+      "device": "App",
+      "orders": [
+        { "order_sn": "2609153X4NF8KA", "order_id": "2431354...",
+          "order_status": "COMPLETED", "display_order_status": 3,
+          "complete_time": 1789891472 }
+      ]
+    }
   ]
 }</code></pre>
-        <p>Quy user từ <code>sub_ids[0]</code> (= userId). Dùng <code>order_sn</code> làm khoá idempotent khi UPSERT.</p>
+        <p><b>Quy user:</b> <code>utm_content.split("-")[0]</code> = userId (subId1). <b>Hoa hồng:</b> <code>estimated_total_commission</code> (dự kiến) hoặc <code>gross_commission</code> (khi xác nhận). <b>Khoá idempotent:</b> <code>order_sn</code> trong <code>orders[]</code>. Xem code đối soát ở mục <a href="#integration">Hướng dẫn tích hợp</a>.</p>
       </div>
 
       <div class="ep" id="by-subid">
@@ -182,6 +243,28 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
   -d '{"cookie":"SPC_F=...; SPC_ST=...; csrftoken=...; ..."}'</code></pre>
         <pre><code>{ "ok": true, "length": 1234, "updatedAt": "2026-09-30T..." }</code></pre>
         <p><code>GET /api/report/cookie</code> → kiểm tra trạng thái: <code>{ ok, configured, length, updatedAt }</code>.</p>
+      </div>
+
+      <div class="ep" id="selfcheck">
+        <h3><span class="method get">GET</span> <code>/api/selfcheck</code></h3>
+        <p>Tự kiểm tra hệ thống (4 mục: affiliate_id, tạo link, tracking, cookie report). Trả <b>200</b> nếu ok, <b>503</b> nếu lỗi — tiện gắn uptime monitor.</p>
+        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/selfcheck"</code></pre>
+        <pre><code>{ "ok": true, "at": "...", "checks": [
+  { "name": "affiliate_id",  "ok": true, "detail": "…0594" },
+  { "name": "build_link",    "ok": true, "detail": "ok" },
+  { "name": "link_tracking", "ok": true, "detail": "301 + utm_source/utm_content đúng" },
+  { "name": "report_cookie", "ok": true, "detail": "ok (N đơn / 1 ngày)" }
+] }</code></pre>
+      </div>
+
+      <div class="ep" id="notify-config">
+        <h3><span class="method post">POST</span> <code>/api/notify/config</code></h3>
+        <p>Cấu hình kênh thông báo (Telegram/webhook), lưu runtime trên volume. Ghi đè <code>config.notify</code>.</p>
+        <pre><code>curl -X POST https://shopee-api.apps.neooi.com/api/notify/config \
+  -H "x-api-key: &lt;key&gt;" -H "Content-Type: application/json" \
+  -d '{"botToken":"123:ABC","chatId":"-5373990315","enabled":true}'</code></pre>
+        <pre><code>{ "ok": true, "enabled": true, "telegram": { "botSet": true, "chatId": "-5373990315" }, "hasWebhook": false }</code></pre>
+        <p><code>GET /api/notify/config</code> → trạng thái hiện tại (không lộ token). Thêm <code>webhook</code> để gửi POST JSON tới URL của bạn.</p>
       </div>
 
       <div class="ep" id="notify-test">
