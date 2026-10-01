@@ -4,6 +4,7 @@ const { loadConfig } = require("./config");
 const linkBuilder = require("./linkBuilder");
 const shopee = require("./shopee");
 const cookieStore = require("./cookieStore");
+const notifyStore = require("./notifyStore");
 const selfcheck = require("./selfcheck");
 const notifier = require("./notifier");
 const { ShopeeError } = shopee;
@@ -64,6 +65,37 @@ app.get(
   wrap(async (req, res) => {
     const r = await notifier.notifyNow("test", "✅ Test thông báo Shopee Aff API — cấu hình notify OK.");
     res.json({ ok: r.ok, detail: r });
+  }),
+);
+
+// Cấu hình kênh thông báo (Telegram/webhook) — lưu runtime trên /data, ghi đè config.notify.
+app.get("/api/notify/config", (req, res) => {
+  const s = notifyStore.get() || {};
+  const tg = s.telegram || {};
+  res.json({
+    ok: true,
+    enabled: s.enabled !== false,
+    telegram: { botSet: !!tg.botToken, chatId: tg.chatId || null },
+    hasWebhook: !!s.webhook,
+    updatedAt: s.updatedAt || null,
+  });
+});
+app.post(
+  "/api/notify/config",
+  wrap(async (req, res) => {
+    const { botToken, chatId, webhook, enabled } = req.body || {};
+    const patch = {};
+    if (enabled !== undefined) patch.enabled = !!enabled;
+    if (webhook !== undefined) patch.webhook = webhook;
+    if (botToken !== undefined || chatId !== undefined) {
+      patch.telegram = {};
+      if (botToken !== undefined) patch.telegram.botToken = String(botToken).trim();
+      if (chatId !== undefined) patch.telegram.chatId = String(chatId).trim();
+    }
+    if (!Object.keys(patch).length) throw new ShopeeError("Không có gì để cập nhật.", { status: 400, code: "EMPTY" });
+    const saved = notifyStore.set(patch);
+    const tg = saved.telegram || {};
+    res.json({ ok: true, enabled: saved.enabled !== false, telegram: { botSet: !!tg.botToken, chatId: tg.chatId || null }, hasWebhook: !!saved.webhook });
   }),
 );
 

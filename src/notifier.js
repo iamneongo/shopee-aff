@@ -2,6 +2,7 @@
 // Hỗ trợ Telegram (kèm ảnh chụp) và webhook chung. Có chống spam (cooldown).
 const fs = require("fs");
 const { loadConfig } = require("./config");
+const notifyStore = require("./notifyStore");
 
 const lastSent = {}; // reason -> timestamp
 
@@ -43,7 +44,13 @@ async function sendWebhook(url, text, extra) {
 async function notify(reason, text, photoPath) {
   let cfg = {};
   try { cfg = loadConfig(); } catch {}
-  const n = cfg.notify || {};
+  const base = cfg.notify || {};
+  const store = notifyStore.get() || {}; // cấu hình runtime (ghi đè config.notify)
+  const n = {
+    ...base,
+    ...store,
+    telegram: { ...(base.telegram || {}), ...(store.telegram || {}) },
+  };
   if (n.enabled === false) return { ok: false, skipped: "disabled" };
 
   const cooldownMs = (n.cooldownSec != null ? n.cooldownSec : 300) * 1000;
