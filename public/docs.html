@@ -60,6 +60,12 @@
       <a href="#errors">Mã lỗi</a>
       <a href="#report-cookie">Cookie report &amp; tần suất</a>
       <a href="#notify">Thông báo (Telegram)</a>
+      <div class="grp">Cơ chế &amp; Nguồn</div>
+      <a href="#co-che">Lý do thiết kế</a>
+      <a href="#logic-link">Logic tạo link</a>
+      <a href="#logic-report">Logic report</a>
+      <a href="#verify">Cách kiểm chứng</a>
+      <a href="#nguon">Nguồn tham khảo</a>
     </nav>
 
     <main>
@@ -230,6 +236,54 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
         <li>Điền vào <code>config.notify.telegram</code> (production: File Mount config.json trên Dokploy).</li>
         <li>Kiểm tra: <code>GET /api/notify/test</code>.</li>
       </ol>
+
+      <h2 id="co-che">Cơ chế &amp; Lý do thiết kế</h2>
+      <p>Mục này ghi lại <b>cách hệ thống hoạt động bên dưới</b> và <b>vì sao chọn cách đó</b>, để bạn hiểu rõ và tự đánh giá.</p>
+
+      <h3>Ba hướng tạo link &amp; lựa chọn</h3>
+      <table>
+        <tr><th>Hướng</th><th>Cơ chế</th><th>Trạng thái</th></tr>
+        <tr><td><b>Open API chính thức</b></td><td>GraphQL + chữ ký SHA256 (app_id/secret)</td><td>❌ Shopee <b>không duyệt</b> cấp quyền cho tài khoản này</td></tr>
+        <tr><td><b>Puppeteer</b> (lái Chrome thật)</td><td>Gọi API nội bộ <code>batchCustomLink</code> trong Chrome đã login</td><td>❌ Đã gỡ — dính <b>captcha + chặn IP</b> liên tục, nặng nề, mong manh</td></tr>
+        <tr><td><b>an_redir</b> (đang dùng)</td><td>Ghép chuỗi tới endpoint chuyển hướng công khai của Shopee</td><td>✅ Nhẹ, không captcha/proxy/đăng nhập</td></tr>
+      </table>
+
+      <h3 id="logic-link">Logic tạo link (<code>/api/link</code>)</h3>
+      <p>Code: <code>src/linkBuilder.js</code>. Các bước:</p>
+      <ol>
+        <li><b>Nhận</b> <code>originalLink</code> + <code>userId</code>/<code>subIds</code> + <code>affiliateId</code> (từ env/config).</li>
+        <li><b>Chuẩn hoá link</b> (<code>resolveToCanonical</code>): nếu là link rút gọn (<code>s.shopee.vn/xxx</code>) thì theo redirect (chỉ đọc header <code>Location</code>, không tải trang) để lấy URL sản phẩm chuẩn <code>/product/&lt;shop&gt;/&lt;item&gt;</code>. <i>Lý do:</i> an_redir chỉ gắn tracking đầy đủ khi <code>origin_link</code> là URL sản phẩm chuẩn; nếu để link rút gọn thì <b>mất tracking</b>.</li>
+        <li><b>Ghép sub_id</b>: <code>subId1..subId5</code> nối bằng dấu <code>-</code> (bỏ đuôi rỗng), <code>subId1 = userId</code>.</li>
+        <li><b>Dựng link</b>: <pre><code>https://s.shopee.vn/an_redir?origin_link=&lt;url chuẩn&gt;&affiliate_id=&lt;id&gt;&sub_id=&lt;s1-s2-...&gt;</code></pre></li>
+        <li><b>Khi user click</b> → Shopee trả <code>301</code> về trang sản phẩm, tự gắn: <code>utm_source=an_&lt;affiliate_id&gt;</code>, <code>utm_content=&lt;sub_id&gt;</code>, <code>utm_medium=affiliates</code>, <code>uls_trackid=...</code> (phiên tracking) → hoa hồng quy về đúng affiliate + user.</li>
+      </ol>
+      <div class="success">✅ Không có bước nào cần Chrome/cookie/captcha/proxy. Server chỉ gọi mạng khi phải resolve link rút gọn; link sản phẩm chuẩn thì <b>thuần ghép chuỗi</b>.</div>
+
+      <h3 id="logic-report">Logic đọc report (<code>/api/report</code>)</h3>
+      <p>Code: <code>src/shopee.js</code> + <code>src/cookieStore.js</code>.</p>
+      <ul>
+        <li>Gọi <code>affiliate.shopee.vn/api/v3/report/list</code> bằng <b>cookie</b> (axios thuần). <i>Lý do dùng cookie:</i> endpoint report <b>không</b> bị kiểm vân tay TLS/captcha như endpoint tạo link, nên chỉ cần cookie hợp lệ là đọc được — không cần trình duyệt.</li>
+        <li>Cookie lưu ở <code>/data/report-cookie.json</code> (volume bền), cập nhật qua <a href="/cookie.html">/cookie.html</a> (dán cookie hoặc nguyên câu cURL — trang tự tách).</li>
+        <li>sub_id của mỗi đơn nằm ở trường <code>utm_content</code> (chuỗi nối <code>-</code>); <code>/api/report/by-subid</code> tách <code>utm_content</code> để lọc theo user.</li>
+        <li>Cookie hết hạn (~1–2 tuần) → Shopee trả <code>90309999</code> → server tự cảnh báo (Telegram/webhook) nhắc cập nhật.</li>
+      </ul>
+
+      <h3 id="verify">Cách kiểm chứng hệ thống chạy đúng</h3>
+      <ol>
+        <li><b>Click</b>: click link an_redir từ điện thoại/mạng thật → sau vài giờ xem mục Hiệu suất/Lưu lượng trong affiliate.shopee.vn (click gom theo <code>utm_content</code>).</li>
+        <li><b>Conversion (chắc chắn nhất)</b>: tạo link với <code>userId</code> test → click → <b>mua 1 đơn nhỏ</b> → gọi <code>/api/report/by-subid?subIds=&lt;userId&gt;</code> → đơn phải hiện với <code>utm_content</code> chứa <code>userId</code>.</li>
+      </ol>
+      <div class="note">💡 Bằng chứng kỹ thuật đã có: link an_redir sinh ra <b>cùng bộ param tracking</b> (<code>utm_source=an_&lt;id&gt;</code>, <code>utm_medium=affiliates</code>) y hệt link affiliate chính thống khi resolve. Nhưng phép thử mua đơn test là cách xác nhận quy đơn <b>100%</b>.</div>
+
+      <h3 id="nguon">Nguồn tham khảo</h3>
+      <ul>
+        <li><b>Shopee Help — Affiliate Short Link Implementation Guide</b> (bản SG, mô tả định dạng an_redir + sub_id): <a href="https://help.shopee.sg/portal/10/article/171184-Affiliate-Short-Link-Implementation-Guide" target="_blank" rel="noopener">help.shopee.sg/.../171184</a></li>
+        <li><b>Shopee Affiliate Open API — Tài liệu</b> (cách "chính thức", cần duyệt): <a href="https://affiliate.shopee.vn/open_api/document?type=authentication" target="_blank" rel="noopener">affiliate.shopee.vn/open_api/document</a></li>
+        <li><b>Shopee Affiliate Sub ID — giải thích</b>: <a href="https://miuravisual.com/shopee-affiliate-sub-id/" target="_blank" rel="noopener">miuravisual.com/shopee-affiliate-sub-id</a></li>
+        <li><b>Affise — Shopee integration</b> (góc nhìn network): <a href="https://help-center.affise.com/en/articles/9730106-shopee" target="_blank" rel="noopener">help-center.affise.com/.../shopee</a></li>
+        <li><b>wecantrack — Shopee conversion integration</b>: <a href="https://wecantrack.com/shopee-integration/" target="_blank" rel="noopener">wecantrack.com/shopee-integration</a></li>
+      </ul>
+      <div class="danger">⚠️ <b>Minh bạch:</b> cách an_redir dựa trên tài liệu Shopee bản SG + nguồn cộng đồng, và được <b>kiểm chứng thực nghiệm</b> trên endpoint thật của Shopee — <b>không</b> phải spec API chính thức cho VN. Mô hình cashback cũng cần tự đối chiếu Điều khoản Affiliate Shopee (phần hoàn tiền/tự mua/công cụ tự động) trước khi scale.</div>
     </main>
   </div>
 </body>
