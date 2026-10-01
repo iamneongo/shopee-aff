@@ -4,6 +4,7 @@ const { loadConfig } = require("./config");
 const linkBuilder = require("./linkBuilder");
 const shopee = require("./shopee");
 const cookieStore = require("./cookieStore");
+const selfcheck = require("./selfcheck");
 const notifier = require("./notifier");
 const { ShopeeError } = shopee;
 
@@ -46,6 +47,7 @@ app.get("/health", (req, res) => {
       "GET  /api/report          ?days=7&page=1&size=50   (cần cookie)",
       "GET  /api/report/by-subid ?subIds=web,test&days=7",
       "POST /api/report/cookie   { cookie }   (UI: /cookie.html)",
+      "GET  /api/selfcheck       (tự kiểm tra hệ thống)",
       "GET  /api/notify/test",
     ],
   });
@@ -187,6 +189,18 @@ app.get(
   }),
 );
 
+// ===== Tự kiểm tra hệ thống (verify định kỳ) =====
+// GET /api/selfcheck → chạy 4 phép kiểm (affiliate_id, tạo link, tracking, cookie report).
+// Trả 200 nếu tất cả ok, 503 nếu có lỗi. Lỗi → tự gửi cảnh báo (có cooldown).
+app.get("/api/selfcheck", wrap(async (req, res) => {
+  const r = await selfcheck.runSelfCheck();
+  if (!r.ok) {
+    notifier.notify("selfcheck", "⚠️ Self-check Shopee Aff API có lỗi:\n" + selfcheck.failSummary(r) +
+      "\nChi tiết: https://shopee-api.apps.neooi.com/api/selfcheck");
+  }
+  res.status(r.ok ? 200 : 503).json(r);
+}));
+
 // 404
 app.use((req, res) => res.status(404).json({ ok: false, error: "Không tìm thấy endpoint." }));
 
@@ -197,6 +211,17 @@ if (require.main === module) {
     console.log(`🚀 Shopee Aff API (stateless) đang chạy tại http://localhost:${port}`);
     console.log("   Tạo link qua s.shopee.vn/an_redir — không cần Chrome/captcha/proxy.");
   });
+
+  // Tự kiểm tra định kỳ mỗi 24h → cảnh báo nếu có lỗi (vd cookie report hết hạn).
+  const DAY = 24 * 60 * 60 * 1000;
+  const runCheck = () => selfcheck.runSelfCheck()
+    .then((r) => {
+      console.log(`[selfcheck] ${r.ok ? "OK" : "FAIL"} — ` + r.checks.map((c) => `${c.name}:${c.ok ? "✓" : "✗"}`).join(" "));
+      if (!r.ok) notifier.notify("selfcheck", "⚠️ Self-check Shopee Aff API có lỗi:\n" + selfcheck.failSummary(r));
+    })
+    .catch((e) => console.error("[selfcheck] lỗi:", e.message));
+  setTimeout(runCheck, 60 * 1000).unref?.(); // chạy 1 lần sau 60s khi khởi động
+  setInterval(runCheck, DAY).unref?.();        // rồi mỗi 24h
 }
 
 module.exports = { app };

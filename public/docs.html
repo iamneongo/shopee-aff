@@ -269,9 +269,25 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
       </ul>
 
       <h3 id="verify">Cách kiểm chứng hệ thống chạy đúng</h3>
+      <p><b>Tự động (mỗi ngày):</b> hệ thống có sẵn <code>GET /api/selfcheck</code> — chạy 4 phép kiểm:</p>
+      <table>
+        <tr><th>Phép kiểm</th><th>Xác nhận điều gì</th></tr>
+        <tr><td><code>affiliate_id</code></td><td>Đã cấu hình affiliate_id</td></tr>
+        <tr><td><code>build_link</code></td><td>Tạo được link an_redir</td></tr>
+        <tr><td><code>link_tracking</code></td><td>Click link → 301 + <code>utm_source=an_&lt;id&gt;</code> + <code>utm_content</code> đúng</td></tr>
+        <tr><td><code>report_cookie</code></td><td>Cookie report còn sống (bắt sớm khi hết hạn)</td></tr>
+      </table>
+      <pre><code>curl -H "x-api-key: &lt;key&gt;" https://shopee-api.apps.neooi.com/api/selfcheck</code></pre>
+      <pre><code>{ "ok": true, "at": "...", "checks": [ { "name": "affiliate_id", "ok": true, ... }, ... ] }</code></pre>
+      <ul>
+        <li>Trả <b>200</b> nếu tất cả ok, <b>503</b> nếu có lỗi (tiện cho uptime monitor).</li>
+        <li>Server <b>tự chạy self-check mỗi 24h</b> và gửi cảnh báo Telegram/webhook nếu lỗi (vd cookie hết hạn) — bạn không cần làm gì.</li>
+        <li>Muốn chủ động: trỏ <b>UptimeRobot/BetterStack</b> hoặc cron backend vào <code>/api/selfcheck</code> hằng ngày; coi HTTP 503 là cảnh báo.</li>
+      </ul>
+      <p><b>Thủ công — phép thử quy đơn 100% (nên làm 1 lần):</b></p>
       <ol>
-        <li><b>Click</b>: click link an_redir từ điện thoại/mạng thật → sau vài giờ xem mục Hiệu suất/Lưu lượng trong affiliate.shopee.vn (click gom theo <code>utm_content</code>).</li>
-        <li><b>Conversion (chắc chắn nhất)</b>: tạo link với <code>userId</code> test → click → <b>mua 1 đơn nhỏ</b> → gọi <code>/api/report/by-subid?subIds=&lt;userId&gt;</code> → đơn phải hiện với <code>utm_content</code> chứa <code>userId</code>.</li>
+        <li>Tạo link với <code>userId</code> test → click → <b>mua 1 đơn nhỏ</b> → gọi <code>/api/report/by-subid?subIds=&lt;userId&gt;</code> → đơn phải hiện với <code>utm_content</code> chứa <code>userId</code>.</li>
+        <li><b>Click</b>: click link từ điện thoại/mạng thật → sau vài giờ xem mục Hiệu suất/Lưu lượng trong affiliate.shopee.vn (click gom theo <code>utm_content</code>).</li>
       </ol>
       <div class="note">💡 Bằng chứng kỹ thuật đã có: link an_redir sinh ra <b>cùng bộ param tracking</b> (<code>utm_source=an_&lt;id&gt;</code>, <code>utm_medium=affiliates</code>) y hệt link affiliate chính thống khi resolve. Nhưng phép thử mua đơn test là cách xác nhận quy đơn <b>100%</b>.</div>
 
