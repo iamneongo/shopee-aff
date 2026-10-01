@@ -37,8 +37,9 @@
   <input id="apikey" type="password" placeholder="Dán API key của bạn" autocomplete="off" />
   <div class="muted" id="cookieState">Đang kiểm tra trạng thái cookie…</div>
 
-  <label for="cookie">Cookie (chuỗi header Cookie đầy đủ)</label>
-  <textarea id="cookie" placeholder="SPC_F=...; SPC_ST=...; csrftoken=...; ..."></textarea>
+  <label for="cookie">Cookie <b>hoặc</b> nguyên câu lệnh cURL (tự tách)</label>
+  <textarea id="cookie" placeholder="Dán 1 trong 2:&#10;• Chuỗi cookie: SPC_F=...; SPC_ST=...; csrftoken=...&#10;• Hoặc nguyên câu curl copy từ DevTools (Copy as cURL) — trang sẽ tự lấy cookie"></textarea>
+  <div class="muted" id="detectState"></div>
 
   <div class="row">
     <button class="primary" onclick="saveCookie()">Lưu cookie</button>
@@ -86,9 +87,34 @@
       } catch (e) { $("cookieState").textContent = "Lỗi mạng: " + e.message; }
     }
 
+    // Tách cookie từ input: cookie thô hoặc nguyên câu cURL
+    function extractCookie(input) {
+      const s = (input || "").trim();
+      if (!s) return "";
+      const looksCurl = /\bcurl\b|(^|\s)-b(\s|=)|--cookie|(^|\s)-H(\s|=)/i.test(s);
+      if (!looksCurl) return s; // cookie thô
+      // 1) -b '...' | --cookie '...'
+      let m = s.match(/(?:-b|--cookie)\s+(['"])([\s\S]*?)\1/);
+      if (m && m[2].includes("=")) return m[2].trim();
+      // 2) -H '... cookie: ...'
+      m = s.match(/-H\s+(['"])\s*cookie\s*:\s*([\s\S]*?)\1/i);
+      if (m) return m[2].trim();
+      // 3) fallback: dòng chứa "cookie:"
+      const line = s.split(/\r?\n/).find((l) => /cookie\s*:/i.test(l));
+      if (line) return line.replace(/.*cookie\s*:\s*/i, "").replace(/['"\\]+\s*$/, "").trim();
+      return s;
+    }
+
     async function saveCookie() {
-      const cookie = $("cookie").value.trim();
-      if (!cookie) return show("Chưa dán cookie.", false);
+      const raw = $("cookie").value;
+      const cookie = extractCookie(raw);
+      const ds = $("detectState");
+      if (!cookie) { ds.textContent = ""; return show("Chưa dán cookie.", false); }
+      const wasCurl = cookie !== raw.trim();
+      const hasSt = /SPC_ST=/.test(cookie);
+      ds.textContent = (wasCurl ? "🔎 Đã tách cookie từ cURL — " : "") +
+        `${cookie.length} ký tự` + (hasSt ? " ✅ có SPC_ST" : " ⚠️ KHÔNG thấy SPC_ST (có thể sai)");
+      if (!hasSt && !confirm("Không thấy SPC_ST trong cookie — có thể không đăng nhập được. Vẫn lưu?")) return;
       try {
         const r = await fetch("/api/report/cookie", { method: "POST", headers: headers(), body: JSON.stringify({ cookie }) });
         const j = await r.json();
