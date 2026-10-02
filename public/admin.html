@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Đối soát Shopee — Admin</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f5f6f8; color: #1f2328; }
+    header { background: #ee4d2d; color: #fff; padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    header h1 { font-size: 18px; margin: 0; }
+    header a { color: #fff; font-size: 13px; }
+    .wrap { max-width: 1200px; margin: 18px auto; padding: 0 14px; }
+    .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+    label { font-size: 13px; font-weight: 600; }
+    input { padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 7px; font-size: 14px; }
+    button { background: #ee4d2d; color: #fff; border: 0; border-radius: 7px; padding: 9px 16px; font-weight: 600; cursor: pointer; font-size: 14px; }
+    button.ghost { background: #eaeef2; color: #24292f; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .statusbar { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; align-items: center; }
+    .pill { padding: 3px 10px; border-radius: 20px; font-weight: 600; font-size: 12px; }
+    .pill.ok { background: #dafbe1; color: #116329; } .pill.bad { background: #ffebe9; color: #a40e26; } .pill.warn { background: #fff3cd; color: #8a6d00; }
+    .kpis { display: flex; gap: 12px; flex-wrap: wrap; }
+    .kpi { flex: 1; min-width: 150px; background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: 12px 14px; }
+    .kpi .n { font-size: 24px; font-weight: 700; } .kpi .l { font-size: 12px; color: #57606a; }
+    .kpi.bad .n { color: #a40e26; } .kpi.ok .n { color: #116329; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f0f2f4; position: sticky; top: 0; }
+    tr.unmatched { background: #fff6f6; }
+    .tag { font-size: 11px; padding: 1px 7px; border-radius: 5px; font-weight: 600; }
+    .tag.completed { background: #dafbe1; color: #116329; } .tag.cancelled { background: #ffebe9; color: #a40e26; } .tag.other { background: #eaeef2; color: #444; }
+    .tag.nomap { background: #ffe0e0; color: #a40e26; }
+    code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+    .muted { color: #8b949e; font-size: 12px; }
+    details pre { background: #0d1117; color: #e6edf3; padding: 10px; border-radius: 6px; overflow: auto; font-size: 11px; max-height: 300px; }
+    #msg { font-size: 13px; margin-left: auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🧾 Đối soát Shopee — Admin</h1>
+    <a href="/cookie.html">🍪 Cookie</a>
+    <a href="/docs.html">📖 Docs</a>
+    <span id="msg"></span>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="statusbar">
+        <span><label>API Key</label> <input id="apikey" type="password" placeholder="x-api-key" style="width:220px" /></span>
+        <span><label>Số ngày</label> <input id="days" type="number" value="30" style="width:70px" /></span>
+        <span><label>Số dòng</label> <input id="size" type="number" value="100" style="width:70px" /></span>
+        <button onclick="syncNow()" id="btn">🔄 Đồng bộ ngay</button>
+        <span id="worker"></span>
+      </div>
+    </div>
+
+    <div class="kpis" id="kpis" style="display:none">
+      <div class="kpi"><div class="n" id="k-total">–</div><div class="l">Conversion (checkout)</div></div>
+      <div class="kpi"><div class="n" id="k-orders">–</div><div class="l">Đơn (orders)</div></div>
+      <div class="kpi ok"><div class="n" id="k-mapped">–</div><div class="l">Map được user</div></div>
+      <div class="kpi bad"><div class="n" id="k-unmatched">–</div><div class="l">KHÔNG map được</div></div>
+      <div class="kpi"><div class="n" id="k-comm">–</div><div class="l">Hoa hồng dự kiến (Σ)</div></div>
+    </div>
+
+    <div class="card" style="padding:0; overflow:auto;">
+      <table id="tbl">
+        <thead><tr>
+          <th>Thời gian mua</th><th>sub_id (utm_content)</th><th>userId</th><th>Hoa hồng</th>
+          <th>order_sn</th><th>Trạng thái</th><th>Thiết bị / nguồn</th><th>Raw</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="8" class="muted" style="padding:16px">Nhập API key rồi bấm "Đồng bộ ngay".</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const KEY_LS = "shopee_aff_apikey";
+    $("apikey").value = localStorage.getItem(KEY_LS) || "";
+    const H = () => { const k = $("apikey").value.trim(); localStorage.setItem(KEY_LS, k); return { "x-api-key": k }; };
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const fmtTime = (t) => t ? new Date(t * 1000).toLocaleString("vi-VN") : "–";
+    const num = (n) => Number(n || 0).toLocaleString("vi-VN");
+
+    function statusTag(s) {
+      const t = String(s || "").toUpperCase();
+      if (t === "COMPLETED" || s === 3) return '<span class="tag completed">COMPLETED</span>';
+      if (t.includes("CANCEL") || t.includes("REFUND")) return '<span class="tag cancelled">' + esc(s) + '</span>';
+      return '<span class="tag other">' + esc(s) + '</span>';
+    }
+
+    async function loadWorker() {
+      // cookie + selfcheck status
+      let ck = {}, sc = {};
+      try { ck = await fetch("/api/report/cookie", { headers: H() }).then(r => r.json()); } catch {}
+      try { sc = await fetch("/api/selfcheck", { headers: H() }).then(r => r.json()); } catch {}
+      const ckPill = ck.configured
+        ? `<span class="pill ok">Cookie OK</span> <span class="muted">(cập nhật ${ck.updatedAt ? new Date(ck.updatedAt).toLocaleString("vi-VN") : "?"})</span>`
+        : `<span class="pill bad">Chưa có cookie</span> <a href="/cookie.html">cập nhật</a>`;
+      const scPill = sc.ok ? '<span class="pill ok">Self-check PASS</span>'
+        : '<span class="pill bad">Self-check FAIL</span>' + (sc.checks ? ' <span class="muted">' + sc.checks.filter(c => !c.ok).map(c => c.name).join(", ") + '</span>' : "");
+      $("worker").innerHTML = ckPill + " &nbsp; " + scPill;
+    }
+
+    async function syncNow() {
+      const btn = $("btn"); btn.disabled = true;
+      $("msg").textContent = "⏳ Đang đồng bộ...";
+      await loadWorker();
+      try {
+        const days = $("days").value || 30, size = $("size").value || 100;
+        const r = await fetch(`/api/report?days=${days}&size=${size}`, { headers: H() });
+        const j = await r.json();
+        if (!r.ok || !j.ok) { $("msg").textContent = `❌ ${r.status} ${j.code || ""} ${j.error || ""}`; btn.disabled = false; return; }
+        render(j.list || []);
+        $("msg").textContent = `✅ Đồng bộ lúc ${new Date().toLocaleTimeString("vi-VN")} — ${j.total} checkout`;
+      } catch (e) { $("msg").textContent = "❌ " + e.message; }
+      btn.disabled = false;
+    }
+
+    function render(list) {
+      let orders = 0, mapped = 0, unmatched = 0, comm = 0;
+      const rows = [];
+      list.forEach((co, i) => {
+        const uc = (co.utm_content || "").trim();
+        const userId = (uc && uc !== "----") ? uc.split("-")[0] : "";
+        const isUnmatched = !userId;
+        if (isUnmatched) unmatched++; else mapped++;
+        const c = Number(co.estimated_total_commission || co.gross_commission || 0);
+        comm += c;
+        const src = [co.device, co.direct_source, co.last_external_source].filter(Boolean).join(" / ");
+        const os = co.orders || [];
+        orders += os.length;
+        const orderSns = os.map(o => esc(o.order_sn)).join("<br>") || "–";
+        const statuses = os.map(o => statusTag(o.order_status || o.display_order_status)).join(" ") || "–";
+        rows.push(`<tr class="${isUnmatched ? "unmatched" : ""}">
+          <td>${fmtTime(co.purchase_time)}</td>
+          <td><code>${esc(uc || "(rỗng)")}</code></td>
+          <td>${userId ? "<b>" + esc(userId) + "</b>" : '<span class="tag nomap">KHÔNG MAP</span>'}</td>
+          <td>${num(c)}</td>
+          <td><code>${orderSns}</code></td>
+          <td>${statuses}</td>
+          <td class="muted">${esc(src)}</td>
+          <td><details><summary class="muted">xem</summary><pre>${esc(JSON.stringify(co, null, 1))}</pre></details></td>
+        </tr>`);
+      });
+      $("rows").innerHTML = rows.join("") || '<tr><td colspan="8" class="muted" style="padding:16px">Không có conversion nào trong khoảng này.</td></tr>';
+      $("kpis").style.display = "flex";
+      $("k-total").textContent = list.length;
+      $("k-orders").textContent = orders;
+      $("k-mapped").textContent = mapped;
+      $("k-unmatched").textContent = unmatched;
+      $("k-comm").textContent = num(comm);
+    }
+
+    if ($("apikey").value) syncNow();
+  </script>
+</body>
+</html>
