@@ -5,6 +5,8 @@ const linkBuilder = require("./linkBuilder");
 const shopee = require("./shopee");
 const cookieStore = require("./cookieStore");
 const notifyStore = require("./notifyStore");
+const mappingStore = require("./mappingStore");
+const conversions = require("./conversions");
 const selfcheck = require("./selfcheck");
 const notifier = require("./notifier");
 const { ShopeeError } = shopee;
@@ -220,6 +222,32 @@ app.get(
     } catch (err) { alertCookieIfExpired(err); throw err; }
   }),
 );
+
+// ===== Conversions đã chuẩn hoá (cho backend đối soát/cashback) =====
+// GET /api/conversions?days=30&size=100&unmatched=1&status=COMPLETED&userId=u123
+// → { ok, conversions:[{orderSn,userId,matched,manual,commission,status,isFraud,orderValue,itemName,items,...}], summary }
+app.get("/api/conversions", wrap(async (req, res) => {
+  try {
+    const r = await conversions.getConversions({
+      days: req.query.days ? Number(req.query.days) : undefined,
+      pageSize: req.query.size ? Number(req.query.size) : undefined,
+      unmatchedOnly: req.query.unmatched === "1" || req.query.unmatchedOnly === "1",
+      status: req.query.status,
+      userId: req.query.userId,
+    });
+    res.json({ ok: true, ...r });
+  } catch (err) { alertCookieIfExpired(err); throw err; }
+}));
+
+// Gán tay order_sn → userId (dùng khi đơn rụng sub_id — unmatched)
+app.get("/api/conversions/map", (req, res) => res.json({ ok: true, map: mappingStore.all() }));
+app.post("/api/conversions/map", wrap(async (req, res) => {
+  const { orderSn, userId } = req.body || {};
+  if (!orderSn) throw new ShopeeError("Thiếu orderSn.", { status: 400, code: "MISSING_ORDERSN" });
+  if (userId) validateSubId(String(userId).trim(), "userId");
+  const m = mappingStore.set(orderSn, userId == null ? "" : String(userId).trim());
+  res.json({ ok: true, orderSn, userId: userId || null, count: Object.keys(m).length });
+}));
 
 // ===== Tự kiểm tra hệ thống (verify định kỳ) =====
 // GET /api/selfcheck → chạy 4 phép kiểm (affiliate_id, tạo link, tracking, cookie report).
