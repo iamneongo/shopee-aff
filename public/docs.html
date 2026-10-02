@@ -38,8 +38,10 @@
   <header>
     <h1>📖 Shopee Aff API — Tài liệu</h1>
     <span>
-      <a href="/cookie.html">🍪 Cookie report</a>
-      <a href="/">🧪 Trang test</a>
+      <a href="/llms.txt">🤖 llms.txt (cho AI)</a>
+      <a href="/admin.html">🧾 Đối soát</a>
+      <a href="/cookie.html">🍪 Cookie</a>
+      <a href="/">🧪 Test</a>
     </span>
   </header>
 
@@ -53,6 +55,8 @@
       <div class="grp">Endpoints</div>
       <a href="#health">GET /health</a>
       <a href="#link">POST /api/link</a>
+      <a href="#conversions">GET /api/conversions ⭐</a>
+      <a href="#map">POST /api/conversions/map</a>
       <a href="#report">GET /api/report</a>
       <a href="#by-subid">GET /api/report/by-subid</a>
       <a href="#cookie">POST /api/report/cookie</a>
@@ -110,8 +114,10 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
       <pre><code>x-api-key: &lt;apiKey của bạn&gt;</code></pre>
 
       <h2 id="integration">⭐ Hướng dẫn tích hợp (cho backend / AI)</h2>
+      <div class="success">🤖 <b>Cho AI agent:</b> đọc bản tối ưu máy tại <a href="/llms.txt"><code>/llms.txt</code></a> (markdown thuần, đầy đủ endpoint + code).</div>
       <p><b>Base URL:</b> <code>https://shopee-api.apps.neooi.com</code> &nbsp;·&nbsp; <b>Header bắt buộc:</b> <code>x-api-key: &lt;API_KEY&gt;</code> cho mọi <code>/api/*</code>.</p>
       <p>Đặt ở env backend của bạn: <code>SHOPEE_API=https://shopee-api.apps.neooi.com</code>, <code>SHOPEE_API_KEY=&lt;key&gt;</code>. Mọi response JSON có <code>ok:true/false</code>; lỗi kèm <code>code</code> + <code>error</code>.</p>
+      <div class="note">💰 <b>Đơn vị tiền:</b> Shopee lưu ×100000. <code>/api/conversions</code> ĐÃ quy về VND; <code>/api/report</code> thô thì CHƯA (tự chia 100000).</div>
 
       <h3>Luồng 1 — Tạo link cashback (khi user bấm "lấy link")</h3>
       <p>Nên <b>cache</b> <code>(userId, originalLink) → shortLink</code> ở DB của bạn (link vĩnh viễn) để khỏi gọi lại.</p>
@@ -129,27 +135,22 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
   return j.shortLink; // https://s.shopee.vn/an_redir?origin_link=...&affiliate_id=...&sub_id=userId-...
 }</code></pre>
 
-      <h3>Luồng 2 — Đối soát &amp; cộng cashback (cron)</h3>
-      <p>Chạy cron (gợi ý: mỗi 1–2h lấy 3–7 ngày + mỗi ngày quét 30–45 ngày). Dữ liệu report theo <b>checkout</b>; mỗi checkout có <code>utm_content</code> (= sub_id) và mảng <code>orders</code>.</p>
+      <h3>Luồng 2 — Đối soát + cashback + clawback (cron)</h3>
+      <p>Dùng <a href="#conversions"><code>/api/conversions</code></a> (đã chuẩn hoá: 1 dòng/order, có <code>userId</code>, <code>status</code>, <code>commission</code> VND, <code>isFraud</code>). Gợi ý cron: mỗi 1–2h lấy 3–7 ngày + mỗi ngày quét 30–45 ngày.</p>
       <pre><code>async function reconcile() {
-  const r = await fetch(process.env.SHOPEE_API + "/api/report?days=30&size=100",
-    { headers: { "x-api-key": process.env.SHOPEE_API_KEY } }).then(x => x.json());
-  if (!r.ok) { alertAdmin(r.code, r.error); return; } // 503 NO_REPORT_COOKIE → cần cập nhật cookie /cookie.html
-  for (const co of r.list) {
-    const userId = (co.utm_content || "").split("-")[0];          // subId1 = userId
-    if (!userId) continue;
-    const commission = Number(co.estimated_total_commission || co.gross_commission || 0);
-    for (const o of (co.orders || [])) {
-      await upsertOrder({                                          // idempotent theo order_sn
-        orderSn: o.order_sn, userId, commission,
-        status: o.order_status || o.display_order_status,          // "COMPLETED", ...
-        purchaseTime: co.purchase_time,
-      });
+  const j = await fetch(process.env.SHOPEE_API + "/api/conversions?days=30&size=100",
+    { headers: { "x-api-key": process.env.SHOPEE_API_KEY } }).then(r => r.json());
+  if (!j.ok) { alertAdmin(j.code, j.error); return; }  // NO_REPORT_COOKIE → cập nhật /cookie.html
+  for (const c of j.conversions) {
+    if (!c.matched) { await saveUnmatched(c); continue; }              // đơn rụng sub_id → chờ gán tay
+    if (c.status === "CANCELLED" || c.status === "REFUNDED") {
+      await clawback(c.orderSn);                                        // thu hồi nếu đã trả (P3)
+    } else if (c.status === "COMPLETED" && !c.isFraud) {
+      await creditCashback(c.orderSn, c.userId, c.commission);         // idempotent theo orderSn
     }
   }
 }</code></pre>
-      <p>Hoặc lọc sẵn theo 1 user: <code>GET /api/report/by-subid?subIds=&lt;userId&gt;&days=30</code> → <code>matched[]</code> cùng shape checkout.</p>
-      <div class="note">💡 Chỉ <b>trả cashback khi đơn hoàn tất</b> (<code>order_status=COMPLETED</code>); đơn huỷ → thu hồi. <code>order_sn</code> làm khoá UNIQUE để không cộng trùng. Một checkout có thể gồm nhiều order.</div>
+      <div class="note">💡 Chỉ trả cashback khi <code>status==="COMPLETED" &amp;&amp; !isFraud</code>; <code>CANCELLED/REFUNDED</code> → thu hồi. <code>orderSn</code> làm khoá UNIQUE (không cộng trùng). Đơn <code>matched:false</code> → lưu "chờ gán", gán bằng <code>POST /api/conversions/map</code>.</div>
 
       <h3>Giám sát</h3>
       <p>Gọi <code>GET /api/selfcheck</code> hằng ngày (200 = khỏe, 503 = lỗi — tiện gắn UptimeRobot). Server cũng tự chạy mỗi 24h và báo Telegram khi cookie report hết hạn.</p>
@@ -188,8 +189,45 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
         <p><code>shortLink</code> là link gửi cho user (click sẽ được tracking). <code>longLink</code> là URL sản phẩm chuẩn đã resolve.</p>
       </div>
 
+      <div class="ep" id="conversions">
+        <h3><span class="method get">GET</span> <code>/api/conversions</code> &nbsp;⭐ <span class="muted" style="font-weight:400">khuyên dùng cho backend</span></h3>
+        <p>Report đã <b>chuẩn hoá</b>: 1 dòng / order, tự parse <code>userId</code>, trạng thái chuẩn, tiền VND, kèm item. Tự áp dụng gán tay (map).</p>
+        <b>Query:</b> <code>days=30</code>, <code>size=100</code>, <code>unmatched=1</code> (chỉ đơn chưa map), <code>status=COMPLETED|CANCELLED|REFUNDED|PENDING</code>, <code>userId=&lt;id&gt;</code>
+        <pre><code>curl -H "x-api-key: &lt;key&gt;" "https://shopee-api.apps.neooi.com/api/conversions?days=30"</code></pre>
+        <pre><code>{
+  "ok": true,
+  "summary": { "total": 2, "matched": 0, "unmatched": 2, "commission": 0, "byStatus": { "COMPLETED": 2 } },
+  "conversions": [
+    {
+      "orderSn": "2609153X4NF8KA", "checkoutId": "2431354...",
+      "userId": "", "subId": "----", "matched": false, "manual": false,
+      "commission": 0,                 // VND (đã ÷100000)
+      "status": "COMPLETED",           // COMPLETED|CANCELLED|REFUNDED|PENDING
+      "isFraud": true,                 // true = Shopee từ chối hoa hồng
+      "orderValue": 91520, "itemName": "Sữa Rửa Mặt ...",
+      "purchaseTime": 1789436248, "completeTime": 1789891472,
+      "device": "App", "source": "Zalo",
+      "items": [ { "itemId": 46309158593, "name": "...", "shopName": "...",
+                   "price": 104000, "actual": 91520, "qty": 1, "commission": 0,
+                   "isFraud": true, "fraudReason": "..." } ],
+      "raw": { "order_status": "COMPLETED", "conversion_status": 3, "cancel_reason": null }
+    }
+  ]
+}</code></pre>
+        <p><b>Quy user:</b> <code>userId</code> có sẵn mỗi dòng (từ sub_id hoặc gán tay). <code>matched:false</code> = đơn rụng sub_id → chờ gán. <b>Clawback:</b> theo dõi <code>status</code> + <code>isFraud</code>. Xem code ở <a href="#integration">Hướng dẫn tích hợp</a>.</p>
+      </div>
+
+      <div class="ep" id="map">
+        <h3><span class="method post">POST</span> <code>/api/conversions/map</code></h3>
+        <p>Gán tay <code>order_sn → userId</code> khi đơn rụng sub_id (unmatched). Tự áp dụng trong <code>/api/conversions</code>. Lưu bền trên volume.</p>
+        <pre><code>curl -X POST https://shopee-api.apps.neooi.com/api/conversions/map \
+  -H "x-api-key: &lt;key&gt;" -H "Content-Type: application/json" \
+  -d '{"orderSn":"2609153X4NF8KA","userId":"u12345"}'   # userId="" để xoá gán</code></pre>
+        <p><code>GET /api/conversions/map</code> → <code>{ ok, map: { orderSn: userId } }</code>.</p>
+      </div>
+
       <div class="ep" id="report">
-        <h3><span class="method get">GET</span> <code>/api/report</code></h3>
+        <h3><span class="method get">GET</span> <code>/api/report</code> <span class="muted" style="font-weight:400">(shape thô — ưu tiên /api/conversions)</span></h3>
         <p>Lấy danh sách đơn chuyển đổi. Đọc bằng <b>cookie</b> — xem mục <a href="#report-cookie">Cookie report</a>.</p>
         <b>Query params</b>
         <table>

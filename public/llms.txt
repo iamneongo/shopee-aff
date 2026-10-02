@@ -1,0 +1,114 @@
+# Shopee Affiliate Cashback API — tham chiếu cho AI agent / backend
+
+> Bản người đọc: /docs.html · Bản này (/llms.txt) tối ưu cho LLM/agent tích hợp.
+
+Base URL: https://shopee-api.apps.neooi.com
+Auth: header `x-api-key: <API_KEY>` cho MỌI `/api/*` (thiếu/sai → 401).
+Response: JSON, luôn có `ok: true|false`. Lỗi: `{ ok:false, code, error, hint? }`.
+Kiến trúc: stateless. Tạo link bằng endpoint chuyển hướng chính thức `s.shopee.vn/an_redir` (không trình duyệt/captcha/proxy). Report đọc bằng cookie affiliate.
+TIỀN: Shopee lưu ×100000. `/api/conversions` ĐÃ quy đổi về VND. `/api/report` thô thì CHƯA (tự chia 100000).
+Độ trễ: Shopee có thể mất tới ~1,5 ngày để một conversion xuất hiện trong report.
+
+## 2 luồng chính
+1. Tạo link khi user yêu cầu: `POST /api/link {originalLink, userId}` → cache `(userId,originalLink)→shortLink`.
+2. Đối soát định kỳ: `GET /api/conversions?days=30` → cộng cashback theo `userId`, idempotent theo `orderSn`, CHỈ khi `status=COMPLETED && isFraud=false`. Thu hồi (clawback) khi `status` thành `CANCELLED`/`REFUNDED`.
+
+## Endpoints
+
+### GET /health  (không cần auth)
+→ `{ ok, service, mode:"stateless", endpoints:[...] }`
+
+### POST /api/link
+body: `{ originalLink (bắt buộc), userId?, subIds?:{subId1..subId5}, affiliateId? }`
+- `userId` → subId1 (người nhận cashback). `userId`/`subIds`: chỉ `[a-zA-Z0-9]`, ≤40 ký tự.
+- `originalLink`: link sản phẩm shopee.vn hoặc link rút gọn (tự resolve về URL chuẩn).
+→ `{ ok, userId, subIds, shortLink, longLink }`
+`shortLink` = `https://s.shopee.vn/an_redir?origin_link=...&affiliate_id=...&sub_id=userId-...`
+Lỗi: `MISSING_LINK`(400), `INVALID_SUBID`(400), `NO_AFFILIATE_ID`(500), `SHOPEE_FAIL_2`(502).
+
+### GET /api/conversions  ← DÙNG CÁI NÀY cho backend (đã chuẩn hoá)
+query: `days=30`, `size=100`, `unmatched=1`, `status=COMPLETED|CANCELLED|REFUNDED|PENDING`, `userId=<id>`
+→ `{ ok, conversions:[Conversion], summary:{ total, matched, unmatched, commission, byStatus } }`
+Conversion = {
+  orderSn, checkoutId,
+  userId,            // từ utm_content (subId1) HOẶC gán tay; "" nếu không map được
+  subId,             // utm_content đầy đủ (vd "u123-web-cashback")
+  matched,           // bool — false = đơn rụng sub_id (unmatched)
+  manual,            // bool — userId đến từ gán tay
+  commission,        // VND (đã ÷100000)
+  status,            // COMPLETED | CANCELLED | REFUNDED | PENDING | ...
+  isFraud,           // bool — true = Shopee từ chối hoa hồng (gian lận)
+  orderValue,        // VND tổng actual_amount các item
+  itemName,          // tên item đầu tiên
+  purchaseTime, completeTime,   // unix giây
+  device, source,
+  items:[{ itemId, name, shopName, price, actual, refunded, qty, commission, status, isFraud, fraudReason }],
+  raw:{ order_status, display_order_status, conversion_status, cancel_reason }
+}
+Quy user: `userId` sẵn trong mỗi dòng. `matched=false` → đơn chưa map user (sub_id rụng) → chờ gán tay.
+Clawback: theo dõi `status` chuyển COMPLETED→CANCELLED/REFUNDED; hoặc `isFraud=true` → không trả cashback.
+
+### GET /api/conversions/map  ·  POST /api/conversions/map   (gán tay attribution)
+POST `{ orderSn, userId }` → ép một order unmatched về `userId` (userId="" để xoá). `userId` chỉ `[a-zA-Z0-9]`.
+GET → `{ ok, map:{ orderSn: userId } }`. Gán tay được áp dụng tự động trong `/api/conversions`.
+
+### GET /api/report  (shape thô của Shopee — ưu tiên /api/conversions thay cho cái này)
+query `days,page,size` → `{ ok, total, list:[checkout] }`. Tiền CHƯA quy đổi (×100000). sub_id ở `utm_content`. Đơn ở `orders[]`, item ở `orders[].items[]`.
+
+### GET /api/report/by-subid?subIds=a,b&days=30 → `{ ok, total, matchedCount, subIds, matched:[checkout] }`
+
+### GET /api/report/cookie  ·  POST /api/report/cookie   (xác thực đọc report)
+POST `{ cookie }` → lưu cookie affiliate.shopee.vn (bắt buộc để đọc report; UI: /cookie.html). GET → `{ configured, length, updatedAt }`.
+Report trả `503 NO_REPORT_COOKIE` (chưa có) hoặc lỗi `90309999` (hết hạn) → cần cập nhật cookie.
+
+### GET /api/selfcheck → `{ ok, at, checks:[{name,ok,detail}] }` (200 ok / 503 lỗi). 4 mục: affiliate_id, build_link, link_tracking, report_cookie. Server tự chạy mỗi 24h + cảnh báo.
+
+### GET /api/notify/config · POST /api/notify/config  `{ botToken?, chatId?, webhook?, enabled? }` — kênh cảnh báo Telegram/webhook.
+### GET /api/notify/test → gửi 1 tin test.
+
+## Code tích hợp (Node)
+
+```js
+// 1) Tạo link cashback (có cache)
+async function getCashbackLink(userId, originalLink) {
+  const cached = await db.links.findOne({ userId, originalLink });
+  if (cached) return cached.shortLink;
+  const j = await fetch(process.env.SHOPEE_API + "/api/link", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": process.env.SHOPEE_API_KEY },
+    body: JSON.stringify({ originalLink, userId }),
+  }).then(r => r.json());
+  if (!j.ok) throw new Error(j.code + ": " + j.error);
+  await db.links.insert({ userId, originalLink, shortLink: j.shortLink });
+  return j.shortLink;
+}
+
+// 2) Đối soát + cashback + clawback (cron, vd mỗi 1-2h)
+async function reconcile() {
+  const j = await fetch(process.env.SHOPEE_API + "/api/conversions?days=30&size=100",
+    { headers: { "x-api-key": process.env.SHOPEE_API_KEY } }).then(r => r.json());
+  if (!j.ok) { alertAdmin(j.code, j.error); return; } // NO_REPORT_COOKIE → cập nhật cookie
+  for (const c of j.conversions) {
+    if (!c.matched) { await saveUnmatched(c); continue; }       // chờ gán tay
+    if (c.status === "CANCELLED" || c.status === "REFUNDED") {
+      await clawback(c.orderSn);                                 // thu hồi nếu đã trả
+    } else if (c.status === "COMPLETED" && !c.isFraud) {
+      await creditCashback(c.orderSn, c.userId, c.commission);   // idempotent theo orderSn
+    }
+  }
+}
+```
+
+## Mã lỗi
+- 400 MISSING_LINK / INVALID_SUBID / MISSING_COOKIE / MISSING_ORDERSN
+- 401 (sai/thiếu x-api-key)
+- 404 (sai endpoint)
+- 500 NO_AFFILIATE_ID / INTERNAL_ERROR (vd report 90309999 = cookie hết hạn)
+- 502 SHOPEE_FAIL_2 (link không hợp lệ)
+- 503 NO_REPORT_COOKIE (chưa cấu hình cookie report)
+
+## Lưu ý vận hành
+- Chỉ trả cashback khi `COMPLETED && !isFraud`; thu hồi khi `CANCELLED/REFUNDED`. Idempotent theo `orderSn`.
+- Đơn không map user (`matched:false`) → lưu "chờ gán", dùng POST /api/conversions/map để gán.
+- Cookie report hết hạn ~1-2 tuần → cập nhật tại /cookie.html (dán cookie hoặc cURL).
+- affiliate_id cấu hình server (env SHOPEE_AFFILIATE_ID); công khai, không bí mật.
