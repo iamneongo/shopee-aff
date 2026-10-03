@@ -7,6 +7,7 @@ const cookieStore = require("./cookieStore");
 const notifyStore = require("./notifyStore");
 const mappingStore = require("./mappingStore");
 const conversions = require("./conversions");
+const product = require("./product");
 const selfcheck = require("./selfcheck");
 const notifier = require("./notifier");
 const { ShopeeError } = shopee;
@@ -222,6 +223,15 @@ app.get(
     } catch (err) { alertCookieIfExpired(err); throw err; }
   }),
 );
+
+// ===== Thông tin sản phẩm TRƯỚC mua (giá + hoa hồng dự kiến, qua AddLiveTag) =====
+// GET /api/product?url=<link SP>   HOẶC   ?itemId=<id>&shopId=<id>
+// → { ok, product:{ name, price, commission(dự kiến), totalRatePercent, ... } }
+app.get("/api/product", wrap(async (req, res) => {
+  const r = await product.getProduct({ url: req.query.url, itemId: req.query.itemId, shopId: req.query.shopId });
+  if (!r.ok) return res.status(r.code === "MISSING_ITEM" ? 400 : 502).json(r);
+  res.json(r);
+}));
 
 // ===== Conversions đã chuẩn hoá (cho backend đối soát/cashback) =====
 // GET /api/conversions?days=30&size=100&unmatched=1&status=COMPLETED&userId=u123
