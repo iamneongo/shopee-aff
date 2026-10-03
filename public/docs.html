@@ -118,6 +118,7 @@ Báo cáo:   client → GET /api/report → affiliate.shopee.vn/report/list (b�
       <p><b>Base URL:</b> <code>https://shopee-api.apps.neooi.com</code> &nbsp;·&nbsp; <b>Header bắt buộc:</b> <code>x-api-key: &lt;API_KEY&gt;</code> cho mọi <code>/api/*</code>.</p>
       <p>Đặt ở env backend của bạn: <code>SHOPEE_API=https://shopee-api.apps.neooi.com</code>, <code>SHOPEE_API_KEY=&lt;key&gt;</code>. Mọi response JSON có <code>ok:true/false</code>; lỗi kèm <code>code</code> + <code>error</code>.</p>
       <div class="note">💰 <b>Đơn vị tiền:</b> Shopee lưu ×100000. <code>/api/conversions</code> ĐÃ quy về VND; <code>/api/report</code> thô thì CHƯA (tự chia 100000).</div>
+      <div class="note">🧩 <b>Phân vai với AddLiveTag:</b> <b>shopee-aff</b> (API này) lo <b>tạo link</b> + <b>đối soát hoa hồng THẬT sau mua</b> (<code>/api/conversions</code>). <b>AddLiveTag</b> lo <b>giá + hoa hồng dự kiến TRƯỚC mua</b> (dữ liệu sản phẩm). Lý do: giá/offer-commission của Shopee bị chặn TLS/anti-bot nên server thuần không lấy được — AddLiveTag là extension chạy trong Chrome nên vượt được. Số để <b>trả cashback</b> luôn lấy từ <code>/api/conversions</code> (thật), không phải số dự kiến.</div>
 
       <h3>Luồng 1 — Tạo link cashback (khi user bấm "lấy link")</h3>
       <p>Nên <b>cache</b> <code>(userId, originalLink) → shortLink</code> ở DB của bạn (link vĩnh viễn) để khỏi gọi lại.</p>

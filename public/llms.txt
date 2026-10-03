@@ -9,6 +9,12 @@ Kiến trúc: stateless. Tạo link bằng endpoint chuyển hướng chính th�
 TIỀN: Shopee lưu ×100000. `/api/conversions` ĐÃ quy đổi về VND. `/api/report` thô thì CHƯA (tự chia 100000).
 Độ trễ: Shopee có thể mất tới ~1,5 ngày để một conversion xuất hiện trong report.
 
+## Phân vai (QUAN TRỌNG cho tích hợp)
+- shopee-aff (API này): (1) TẠO LINK affiliate gắn userId, (2) ĐỐI SOÁT hoa hồng THẬT sau khi mua (/api/conversions).
+- AddLiveTag (data.addlivetag.com, dịch vụ riêng, X-API-Key riêng): GIÁ + thông tin/hoa hồng dự kiến TRƯỚC khi mua (product data).
+- Lý do tách: giá + offer-commission của Shopee bị chặn TLS/anti-bot (error 90309999) → server thuần KHÔNG lấy được; AddLiveTag là extension chạy trong Chrome nên vượt được. shopee-aff KHÔNG cung cấp giá/hoa-hồng-trước-mua. Đừng gọi shopee-aff cho dữ liệu sản phẩm trước mua.
+- Nguồn hoa hồng THẬT (để trả cashback chính xác) LUÔN là /api/conversions (post-purchase), không phải số dự kiến của AddLiveTag.
+
 ## 2 luồng chính
 1. Tạo link khi user yêu cầu: `POST /api/link {originalLink, userId}` → cache `(userId,originalLink)→shortLink`.
 2. Đối soát định kỳ: `GET /api/conversions?days=30` → cộng cashback theo `userId`, idempotent theo `orderSn`, CHỈ khi `status=COMPLETED && isFraud=false`. Thu hồi (clawback) khi `status` thành `CANCELLED`/`REFUNDED`.
